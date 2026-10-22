@@ -1,39 +1,9 @@
 
-const express = require("express");
-const cors = require("cors");
-const mongoose = require("mongoose");
 require("dotenv").config();
 
-const adminRoutes = require("./routes/adminRoutes");
+const mongoose = require("mongoose");
+const app = require("./app");
 
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Home route
-app.get("/", (req, res) => {
-  res.json({
-    message: "Smart Complaint Management System API is running!",
-  });
-});
-
-// Health check route
-app.get("/health", (req, res) => {
-  res.json({
-    server: "running",
-    database:
-      mongoose.connection.readyState === 1
-        ? "connected"
-        : "disconnected",
-  });
-});
-
-// Admin routes
-app.use("/api/admin", adminRoutes);
-
-// Start server after connecting to MongoDB
 async function startServer() {
   try {
     if (!process.env.MONGODB_URI) {

@@ -160,7 +160,7 @@ router.patch(
       const complaint = await Complaint.findByIdAndUpdate(
         id,
         { $set: { status } },
-        { new: true, runValidators: true }
+        {returnDocument: "after", runValidators: true}
       ).populate("submittedBy", "name email");
 
       if (!complaint) {
