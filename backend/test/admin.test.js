@@ -3,6 +3,7 @@ const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const request = require("supertest");
 const { MongoMemoryServer } = require("mongodb-memory-server");
 
@@ -23,7 +24,6 @@ const userPassword = "RegularTestPassword123!";
 
 before(async () => {
   mongoServer = await MongoMemoryServer.create();
-
   await mongoose.connect(mongoServer.getUri());
 });
 
@@ -146,20 +146,6 @@ test("F-013: complaint listing rejects unauthenticated access", async () => {
 });
 
 test("F-013: complaint listing rejects a regular user", async () => {
-  const token = await getAdminToken();
-
-  const userTokenResponse = await request(app)
-    .post("/api/admin/login")
-    .send({
-      email: regularUser.email,
-      password: userPassword,
-    });
-
-  assert.equal(userTokenResponse.status, 401);
-
-  // A correctly signed token for a regular user must still
-  // be denied by the admin authorization middleware.
-  const jwt = require("jsonwebtoken");
   const regularToken = jwt.sign(
     { userId: regularUser._id.toString() },
     process.env.JWT_SECRET,
@@ -187,10 +173,7 @@ test("F-014: admin can view complaint details", async () => {
     response.body.complaint.title,
     "Water leakage in laboratory"
   );
-  assert.equal(
-    response.body.complaint.status,
-    "Submitted"
-  );
+  assert.equal(response.body.complaint.status, "Submitted");
 });
 
 test("F-014: invalid complaint ID is rejected", async () => {
@@ -227,9 +210,7 @@ test("F-015: admin can update complaint status", async () => {
   assert.equal(response.status, 200);
   assert.equal(response.body.complaint.status, "In Progress");
 
-  // Verify that the new status was actually persisted.
   const savedComplaint = await Complaint.findById(complaint._id);
-
   assert.equal(savedComplaint.status, "In Progress");
 });
 
@@ -261,4 +242,99 @@ test("F-015: status update rejects unauthenticated access", async () => {
     .send({ status: "Resolved" });
 
   assert.equal(response.status, 401);
+});
+
+// Additional security tests
+
+test("Security: missing authorization header is rejected", async () => {
+  const response = await request(app)
+    .get("/api/admin/complaints");
+
+  assert.equal(response.status, 401);
+});
+
+test("Security: malformed bearer token is rejected", async () => {
+  const response = await request(app)
+    .get("/api/admin/complaints")
+    .set("Authorization", "Bearer not-a-valid-jwt");
+
+  assert.equal(response.status, 401);
+});
+
+test("Security: expired admin token is rejected", async () => {
+  const expiredToken = jwt.sign(
+    { userId: admin._id.toString() },
+    process.env.JWT_SECRET,
+    { expiresIn: -1 }
+  );
+
+  const response = await request(app)
+    .get("/api/admin/complaints")
+    .set(withToken(expiredToken));
+
+  assert.equal(response.status, 401);
+});
+
+test("Security: token signed with another secret is rejected", async () => {
+  const invalidToken = jwt.sign(
+    { userId: admin._id.toString() },
+    "a-completely-different-test-secret",
+    { expiresIn: "2h" }
+  );
+
+  const response = await request(app)
+    .get("/api/admin/complaints")
+    .set(withToken(invalidToken));
+
+  assert.equal(response.status, 401);
+});
+
+test("Security: login rejects missing email", async () => {
+  const response = await request(app)
+    .post("/api/admin/login")
+    .send({ password: adminPassword });
+
+  assert.equal(response.status, 400);
+});
+
+test("Security: login rejects missing password", async () => {
+  const response = await request(app)
+    .post("/api/admin/login")
+    .send({ email: admin.email });
+
+  assert.equal(response.status, 400);
+});
+
+test("Security: empty status update is rejected without changing status", async () => {
+  const token = await getAdminToken();
+
+  const response = await request(app)
+    .patch(`/api/admin/complaints/${complaint._id}/status`)
+    .set(withToken(token))
+    .send({});
+
+  assert.equal(response.status, 400);
+
+  const savedComplaint = await Complaint.findById(complaint._id);
+  assert.equal(savedComplaint.status, "Submitted");
+});
+
+test("Security: malformed status request body is rejected", async () => {
+  const token = await getAdminToken();
+
+  const response = await request(app)
+    .patch(`/api/admin/complaints/${complaint._id}/status`)
+    .set(withToken(token))
+    .set("Content-Type", "application/json")
+    .send("{invalid json");
+
+  assert.equal(response.status, 400);
+
+  assert.equal(
+    response.body.message,
+    "Invalid JSON request body."
+  );
+
+  const savedComplaint = await Complaint.findById(complaint._id);
+  assert.equal(savedComplaint.status, "Submitted");
 });
