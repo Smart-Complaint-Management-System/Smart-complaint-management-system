@@ -21,3 +21,4 @@ frontend/.env.local
 
 # Logs
 npm-debug.log*
+backend/mongodb-debug.txt
