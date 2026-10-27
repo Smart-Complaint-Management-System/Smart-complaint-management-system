@@ -1,4 +1,3 @@
-
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -6,6 +5,7 @@ const mongoose = require("mongoose");
 
 const User = require("../models/User");
 const Complaint = require("../models/Complaint");
+const AuditLog = require("../models/AuditLog");
 const { requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
@@ -71,6 +71,7 @@ router.post("/login", async (req, res) => {
     });
   } catch (error) {
     console.error("Admin login error:", error.message);
+
     return res.status(500).json({
       message: "An internal server error occurred.",
     });
@@ -90,6 +91,7 @@ router.get("/complaints", requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch complaints error:", error.message);
+
     return res.status(500).json({
       message: "Failed to retrieve complaints.",
     });
@@ -119,13 +121,85 @@ router.get("/complaints/:id", requireAdmin, async (req, res) => {
     return res.status(200).json({ complaint });
   } catch (error) {
     console.error("Complaint details error:", error.message);
+
     return res.status(500).json({
       message: "Failed to retrieve complaint details.",
     });
   }
 });
 
-// 4. Update complaint status
+// 4. Add or update complaint resolution
+router.patch(
+  "/complaints/:id/resolution",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { resolution } = req.body;
+
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({
+          message: "Invalid complaint ID.",
+        });
+      }
+
+      if (
+        typeof resolution !== "string" ||
+        !resolution.trim() ||
+        resolution.trim().length > 2000
+      ) {
+        return res.status(400).json({
+          message:
+            "Resolution must contain between 1 and 2000 characters.",
+        });
+      }
+
+      const complaint = await Complaint.findById(id);
+
+      if (!complaint) {
+        return res.status(404).json({
+          message: "Complaint not found.",
+        });
+      }
+
+      if (complaint.status === "Closed") {
+        return res.status(409).json({
+          message: "A closed complaint cannot be modified.",
+        });
+      }
+
+      const previousResolution = complaint.resolution || "";
+      const resolutionText = resolution.trim();
+
+      complaint.resolution = resolutionText;
+      await complaint.save();
+
+      await AuditLog.create({
+        administrator: req.user._id,
+        complaint: complaint._id,
+        action: previousResolution
+          ? "RESOLUTION_UPDATED"
+          : "RESOLUTION_ADDED",
+        details: {
+          resolutionLength: resolutionText.length,
+        },
+      });
+
+      return res.status(200).json({
+        message: "Complaint resolution saved successfully.",
+        complaint,
+      });
+    } catch (error) {
+      console.error("Save resolution error:", error.message);
+
+      return res.status(500).json({
+        message: "Failed to save complaint resolution.",
+      });
+    }
+  }
+);
+
+// 5. Update complaint status
 router.patch(
   "/complaints/:id/status",
   requireAdmin,
@@ -157,11 +231,7 @@ router.patch(
         });
       }
 
-      const complaint = await Complaint.findByIdAndUpdate(
-        id,
-        { $set: { status } },
-        {returnDocument: "after", runValidators: true}
-      ).populate("submittedBy", "name email");
+      const complaint = await Complaint.findById(id);
 
       if (!complaint) {
         return res.status(404).json({
@@ -169,12 +239,47 @@ router.patch(
         });
       }
 
+      if (complaint.status === "Closed" && status !== "Closed") {
+        return res.status(409).json({
+          message: "A closed complaint cannot be reopened.",
+        });
+      }
+
+      if (status === "Closed" && !complaint.resolution?.trim()) {
+        return res.status(400).json({
+          message: "A complaint must have a resolution before closure.",
+        });
+      }
+
+      const previousStatus = complaint.status;
+
+      complaint.status = status;
+      await complaint.save();
+
+      if (previousStatus !== status) {
+        await AuditLog.create({
+          administrator: req.user._id,
+          complaint: complaint._id,
+          action:
+            status === "Closed"
+              ? "COMPLAINT_CLOSED"
+              : "COMPLAINT_STATUS_CHANGED",
+          details: {
+            previousStatus,
+            newStatus: status,
+          },
+        });
+      }
+
+      await complaint.populate("submittedBy", "name email");
+
       return res.status(200).json({
         message: "Complaint status updated successfully.",
         complaint,
       });
     } catch (error) {
       console.error("Update status error:", error.message);
+
       return res.status(500).json({
         message: "Failed to update complaint status.",
       });
