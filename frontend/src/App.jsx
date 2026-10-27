@@ -10,6 +10,7 @@ import {
   adminLogin as loginAdmin,
   getComplaints,
   getComplaintById,
+  saveComplaintResolution,
   setAuthToken,
   updateComplaintStatus,
 } from "./services/api";
@@ -22,13 +23,18 @@ const menuItems = [
   { label: "Resolution", icon: "✓" },
 ];
 
-const STATUSES = ["Submitted", "In Progress", "Resolved", "Closed"];
+const NEXT_STATUS = {
+  Submitted: "In Progress",
+  "In Progress": "Resolved",
+  Resolved: "Closed",
+};
 
 export default function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   const [token, setToken] = useState(
     () => sessionStorage.getItem("adminToken") || ""
@@ -37,6 +43,7 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [selectedComplaint, setSelectedComplaint] = useState(null);
+  const [resolutionDraft, setResolutionDraft] = useState("");
   const [loginOpen, setLoginOpen] = useState(false);
 
   // Restore the API authentication header when the app loads.
@@ -112,9 +119,11 @@ export default function App() {
     }
 
     setSelectedComplaint(null);
+    setResolutionDraft("");
     setActivePage("Complaint Details");
     setLoading(true);
     setError("");
+    setSuccess("");
 
     try {
       setAuthToken(token);
@@ -129,6 +138,7 @@ export default function App() {
       }
 
       setSelectedComplaint(details);
+      setResolutionDraft(details.resolution || "");
     } catch (err) {
       setError(
         err.response?.data?.message ||
@@ -136,6 +146,61 @@ export default function App() {
           "Could not load complaint details."
       );
       setActivePage("All Complaints");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveResolution(event) {
+    event.preventDefault();
+
+    if (!selectedComplaint || !token) {
+      setError("Please sign in as an admin first.");
+      return;
+    }
+
+    const resolution = resolutionDraft.trim();
+
+    if (!resolution || resolution.length > 2000) {
+      setError("Resolution must contain between 1 and 2000 characters.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    setLoading(true);
+
+    try {
+      setAuthToken(token);
+
+      const data = await saveComplaintResolution(
+        selectedComplaint._id,
+        resolution
+      );
+      const updatedComplaint = data.complaint;
+
+      if (!updatedComplaint) {
+        throw new Error(
+          "The backend did not return the updated complaint."
+        );
+      }
+
+      setComplaints((previous) =>
+        previous.map((complaint) =>
+          complaint._id === updatedComplaint._id
+            ? updatedComplaint
+            : complaint
+        )
+      );
+      setSelectedComplaint(updatedComplaint);
+      setResolutionDraft(updatedComplaint.resolution || "");
+      setSuccess("Resolution saved successfully.");
+    } catch (err) {
+      setError(
+        err.response?.data?.message ||
+          err.message ||
+          "Could not save complaint resolution."
+      );
     } finally {
       setLoading(false);
     }
@@ -154,6 +219,7 @@ export default function App() {
     }
 
     setError("");
+    setSuccess("");
     setLoading(true);
 
     try {
@@ -177,6 +243,7 @@ export default function App() {
       );
 
       setSelectedComplaint(updatedComplaint);
+      setSuccess(`Complaint status updated to ${updatedComplaint.status}.`);
     } catch (err) {
       setError(
         err.response?.data?.message ||
@@ -194,10 +261,12 @@ export default function App() {
     setToken("");
     setComplaints([]);
     setSelectedComplaint(null);
+    setResolutionDraft("");
     setActivePage("Dashboard");
     setPassword("");
     setLoginOpen(false);
     setError("");
+    setSuccess("");
   }
 
   function openComplaints() {
@@ -375,6 +444,45 @@ export default function App() {
       );
     }
 
+    if (activePage === "Resolution") {
+      const actionableComplaints = complaints.filter(
+        (complaint) => complaint.status !== "Closed"
+      );
+
+      return (
+        <>
+          <PageHeading
+            title="Resolution"
+            description="Record complaint outcomes and advance resolved complaints to closure."
+          />
+
+          {token ? (
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-5">
+                <p className="text-sm text-slate-500">
+                  {actionableComplaints.length} open complaint(s)
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void loadComplaints()}
+                  disabled={loading}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {loading ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+              <ComplaintTable
+                complaints={actionableComplaints}
+                onSelect={selectComplaint}
+              />
+            </div>
+          ) : (
+            <LoginPrompt onLogin={() => setLoginOpen(true)} />
+          )}
+        </>
+      );
+    }
+
     if (activePage === "Complaint Details") {
       if (loading && !selectedComplaint) {
         return (
@@ -475,31 +583,83 @@ export default function App() {
             </div>
 
             <div className="mt-7 border-t border-slate-100 pt-5">
-              <label
-                htmlFor="complaint-status"
-                className="mb-2 block text-sm font-semibold"
-              >
-                Update status
-              </label>
+              <h4 className="text-sm font-semibold">Resolution response</h4>
+              {complaint.status === "Closed" ? (
+                <p className="mt-2 text-sm text-slate-500">
+                  This complaint is closed and can no longer be changed.
+                </p>
+              ) : (
+                <form onSubmit={saveResolution}>
+                  <label htmlFor="complaint-resolution" className="sr-only">
+                    Resolution response
+                  </label>
+                  <textarea
+                    id="complaint-resolution"
+                    value={resolutionDraft}
+                    onChange={(event) => setResolutionDraft(event.target.value)}
+                    maxLength={2000}
+                    rows={5}
+                    required
+                    disabled={loading}
+                    placeholder="Describe the action taken or proposed resolution."
+                    className="mt-3 w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-60"
+                  />
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-slate-500">
+                      {resolutionDraft.length}/2000 characters
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={loading || !resolutionDraft.trim()}
+                      className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {loading ? "Saving…" : "Save resolution"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
 
-              <select
-                id="complaint-status"
-                value={complaint.status || "Submitted"}
-                disabled={loading}
-                onChange={(event) =>
-                  void updateStatus(
-                    complaint._id,
-                    event.target.value
-                  )
-                }
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-60 sm:max-w-xs"
-              >
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
+            <div className="mt-6 border-t border-slate-100 pt-5">
+              <h4 className="text-sm font-semibold">Complaint workflow</h4>
+              <p className="mt-1 text-sm text-slate-500">
+                Current status: {complaint.status}
+              </p>
+              {NEXT_STATUS[complaint.status] ? (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updateStatus(
+                        complaint._id,
+                        NEXT_STATUS[complaint.status]
+                      )
+                    }
+                    disabled={
+                      loading ||
+                      ((NEXT_STATUS[complaint.status] === "Resolved" ||
+                        NEXT_STATUS[complaint.status] === "Closed") &&
+                        !complaint.resolution?.trim())
+                    }
+                    className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {loading
+                      ? "Updating…"
+                      : `Advance to ${NEXT_STATUS[complaint.status]}`}
+                  </button>
+                  {(NEXT_STATUS[complaint.status] === "Resolved" ||
+                    NEXT_STATUS[complaint.status] === "Closed") &&
+                    !complaint.resolution?.trim() && (
+                      <p className="mt-2 text-xs text-amber-700">
+                        Save a resolution before advancing this complaint.
+                      </p>
+                    )}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">
+                  This complaint has reached its final status.
+                </p>
+              )}
             </div>
           </div>
         </>
@@ -567,9 +727,15 @@ export default function App() {
                 onClick={() => {
                   setActivePage(item.label);
                   setSelectedComplaint(null);
+                setResolutionDraft("");
                   setError("");
+                  setSuccess("");
 
-                  if (item.label === "All Complaints" && token) {
+                if (
+                  (item.label === "All Complaints" ||
+                    item.label === "Resolution") &&
+                  token
+                ) {
                     void loadComplaints(token);
                   }
                 }}
@@ -650,9 +816,15 @@ export default function App() {
               onClick={() => {
                 setActivePage(item.label);
                 setSelectedComplaint(null);
+                  setResolutionDraft("");
                 setError("");
+                  setSuccess("");
 
-                if (item.label === "All Complaints" && token) {
+                  if (
+                    (item.label === "All Complaints" ||
+                      item.label === "Resolution") &&
+                    token
+                  ) {
                   void loadComplaints(token);
                 }
               }}
@@ -684,6 +856,15 @@ export default function App() {
                 ✕
               </button>
             </div>
+          )}
+
+          {success && (
+            <p
+              role="status"
+              className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
+            >
+              {success}
+            </p>
           )}
 
           {loading && (

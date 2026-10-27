@@ -42,4 +42,12 @@ export async function updateComplaintStatus(id, status) {
   return response.data;
 }
 
+export async function saveComplaintResolution(id, resolution) {
+  const response = await api.patch(
+    `/api/admin/complaints/${id}/resolution`,
+    { resolution }
+  );
+  return response.data;
+}
+
 export default api;
