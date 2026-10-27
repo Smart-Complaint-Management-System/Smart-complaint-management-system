@@ -9,6 +9,64 @@ const AuditLog = require("../models/AuditLog");
 const { requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
+const NEXT_STATUS = {
+  Submitted: "In Progress",
+  "In Progress": "Resolved",
+  Resolved: "Closed",
+};
+
+class RouteError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function updateComplaintWithAudit(id, administrator, changeComplaint) {
+  const session = await mongoose.startSession();
+  let updatedComplaint;
+
+  try {
+    await session.withTransaction(async () => {
+      const complaint = await Complaint.findById(id).session(session);
+
+      if (!complaint) {
+        throw new RouteError(404, "Complaint not found.");
+      }
+
+      const auditEvent = changeComplaint(complaint);
+
+      if (auditEvent) {
+        await complaint.save({ session });
+        await AuditLog.create(
+          [
+            {
+              administrator,
+              complaint: complaint._id,
+              ...auditEvent,
+            },
+          ],
+          { session }
+        );
+      }
+
+      updatedComplaint = complaint;
+    });
+
+    return updatedComplaint;
+  } finally {
+    await session.endSession();
+  }
+}
+
+function sendRouteError(res, error, message, context) {
+  if (error instanceof RouteError) {
+    return res.status(error.status).json({ message: error.message });
+  }
+
+  console.error(`${context}:`, error.message);
+  return res.status(500).json({ message });
+}
 
 // 1. Admin Login
 router.post("/login", async (req, res) => {
@@ -135,7 +193,7 @@ router.patch(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const { resolution } = req.body;
+      const resolution = req.body?.resolution;
 
       if (!mongoose.isValidObjectId(id)) {
         return res.status(400).json({
@@ -154,47 +212,43 @@ router.patch(
         });
       }
 
-      const complaint = await Complaint.findById(id);
-
-      if (!complaint) {
-        return res.status(404).json({
-          message: "Complaint not found.",
-        });
-      }
-
-      if (complaint.status === "Closed") {
-        return res.status(409).json({
-          message: "A closed complaint cannot be modified.",
-        });
-      }
-
-      const previousResolution = complaint.resolution || "";
       const resolutionText = resolution.trim();
+      const complaint = await updateComplaintWithAudit(
+        id,
+        req.user._id,
+        (currentComplaint) => {
+          if (currentComplaint.status === "Closed") {
+            throw new RouteError(
+              409,
+              "A closed complaint cannot be modified."
+            );
+          }
 
-      complaint.resolution = resolutionText;
-      await complaint.save();
+          const previousResolution = currentComplaint.resolution || "";
+          currentComplaint.resolution = resolutionText;
 
-      await AuditLog.create({
-        administrator: req.user._id,
-        complaint: complaint._id,
-        action: previousResolution
-          ? "RESOLUTION_UPDATED"
-          : "RESOLUTION_ADDED",
-        details: {
-          resolutionLength: resolutionText.length,
-        },
-      });
+          return {
+            action: previousResolution
+              ? "RESOLUTION_UPDATED"
+              : "RESOLUTION_ADDED",
+            details: {
+              resolutionLength: resolutionText.length,
+            },
+          };
+        }
+      );
 
       return res.status(200).json({
         message: "Complaint resolution saved successfully.",
         complaint,
       });
     } catch (error) {
-      console.error("Save resolution error:", error.message);
-
-      return res.status(500).json({
-        message: "Failed to save complaint resolution.",
-      });
+      return sendRouteError(
+        res,
+        error,
+        "Failed to save complaint resolution.",
+        "Save resolution error"
+      );
     }
   }
 );
@@ -231,45 +285,63 @@ router.patch(
         });
       }
 
-      const complaint = await Complaint.findById(id);
+      const complaint = await updateComplaintWithAudit(
+        id,
+        req.user._id,
+        (currentComplaint) => {
+          if (status === currentComplaint.status) {
+            return null;
+          }
 
-      if (!complaint) {
-        return res.status(404).json({
-          message: "Complaint not found.",
-        });
-      }
+          if (
+            status === "Closed" &&
+            !currentComplaint.resolution?.trim()
+          ) {
+            throw new RouteError(
+              400,
+              "A complaint must have a resolution before closure."
+            );
+          }
 
-      if (complaint.status === "Closed" && status !== "Closed") {
-        return res.status(409).json({
-          message: "A closed complaint cannot be reopened.",
-        });
-      }
+          if (currentComplaint.status === "Closed") {
+            throw new RouteError(
+              409,
+              "A closed complaint cannot be reopened."
+            );
+          }
 
-      if (status === "Closed" && !complaint.resolution?.trim()) {
-        return res.status(400).json({
-          message: "A complaint must have a resolution before closure.",
-        });
-      }
+          if (NEXT_STATUS[currentComplaint.status] !== status) {
+            throw new RouteError(
+              409,
+              "Invalid status transition. Complaints must move through the defined workflow."
+            );
+          }
 
-      const previousStatus = complaint.status;
+          if (
+            status === "Resolved" &&
+            !currentComplaint.resolution?.trim()
+          ) {
+            throw new RouteError(
+              400,
+              "A complaint must have a resolution before it can be resolved."
+            );
+          }
 
-      complaint.status = status;
-      await complaint.save();
+          const previousStatus = currentComplaint.status;
+          currentComplaint.status = status;
 
-      if (previousStatus !== status) {
-        await AuditLog.create({
-          administrator: req.user._id,
-          complaint: complaint._id,
-          action:
-            status === "Closed"
-              ? "COMPLAINT_CLOSED"
-              : "COMPLAINT_STATUS_CHANGED",
-          details: {
-            previousStatus,
-            newStatus: status,
-          },
-        });
-      }
+          return {
+            action:
+              status === "Closed"
+                ? "COMPLAINT_CLOSED"
+                : "COMPLAINT_STATUS_CHANGED",
+            details: {
+              previousStatus,
+              newStatus: status,
+            },
+          };
+        }
+      );
 
       await complaint.populate("submittedBy", "name email");
 
@@ -278,11 +350,12 @@ router.patch(
         complaint,
       });
     } catch (error) {
-      console.error("Update status error:", error.message);
-
-      return res.status(500).json({
-        message: "Failed to update complaint status.",
-      });
+      return sendRouteError(
+        res,
+        error,
+        "Failed to update complaint status.",
+        "Update status error"
+      );
     }
   }
 );
