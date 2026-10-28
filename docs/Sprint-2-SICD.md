@@ -350,17 +350,39 @@ npm run dev
 
 ## 13. Requirements Traceability Matrix (RTM)
 
-| Jira Key | Requirement | Primary Implementation Files / Endpoints | Automated Test Suite | Verified State |
-| :--- | :--- | :--- | :--- | :---: |
-| **`SCMS-13`** | `SCMS-F-008`, `SCMS-SR-004` | `backend/routes/complaintRoutes.js` (`GET /api/complaints`), `frontend/src/components/UserComplaintList.jsx` | `test/scms_13_user_complaints.test.js` | **Verified (5/5)** |
-| **`SCMS-14`** | `SCMS-F-009`, `SCMS-SR-004` | `backend/routes/complaintRoutes.js` (`GET /api/complaints/:id`), `frontend/src/components/StatusTimeline.jsx` | `test/scms_14_track_status.test.js` | **Verified (5/5)** |
-| **`SCMS-15`** | `SCMS-F-010`, `SCMS-NF-003` | `frontend/src/components/StatusBadge.jsx`, `frontend/src/components/StatusTimeline.jsx` | `test/scms_15_status_display.test.js` | **Verified (3/3)** |
-| **`SCMS-16`** | `SCMS-F-011`, `SCMS-NF-005` | `backend/routes/complaintRoutes.js` (`GET /api/complaints/:id/updates`), `backend/models/AuditLog.js` | `test/scms_16_complaint_updates.test.js` | **Verified (5/5)** |
-| **`SCMS-17`** | `SCMS-F-012`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`POST /api/admin/login`), `frontend/src/components/AdminLoginModal.jsx` | `test/scms_17_admin_auth.test.js` | **Verified (5/5)** |
-| **`SCMS-18`** | `SCMS-F-013`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`GET /api/admin/complaints`), `frontend/src/components/ComplaintTable.jsx` | `test/scms_18_admin_complaint_list.test.js` | **Verified (4/4)** |
-| **`SCMS-19`** | `SCMS-F-014`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`GET /api/admin/complaints/:id`), `frontend/src/App.jsx` | `test/scms_19_admin_complaint_details.test.js` | **Verified (4/4)** |
-| **`SCMS-25`** | `SCMS-SR-002`, `SCMS-NF-004` | `backend/middleware/authMiddleware.js` (`requireAdmin`), `backend/routes/adminRoutes.js` | `test/scms_25_admin_authorization.test.js` | **Verified (6/6)** |
-| **`SCMS-27`** | `SCMS-SR-004`, `SCMS-NF-004` | `backend/routes/complaintRoutes.js` (ownership verification) | `test/scms_27_complaint_ownership.test.js` | **Verified (5/5)** |
+| Jira Key | Requirement | Primary Implementation Files / Endpoints | Automated Test Suite | Verified State | Branch / PR | Review & Merge Status |
+| :--- | :--- | :--- | :--- | :---: | :--- | :---: |
+| **`SCMS-13`** | `SCMS-F-008`, `SCMS-SR-004` | `backend/routes/complaintRoutes.js` (`GET /api/complaints`), `frontend/src/components/UserComplaintList.jsx` | `test/scms_13_user_complaints.test.js` | **Verified (5/5)** | `feature/SCMS-13-my-complaints` / [#14](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/14) | Awaiting Peer Review |
+| **`SCMS-14`** | `SCMS-F-009`, `SCMS-SR-004` | `backend/routes/complaintRoutes.js` (`GET /api/complaints/:id`), `frontend/src/components/StatusTimeline.jsx` | `test/scms_14_track_status.test.js` | **Verified (5/5)** | `feature/SCMS-14-complaint-status` / [#15](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/15) | Awaiting Peer Review |
+| **`SCMS-15`** | `SCMS-F-010`, `SCMS-NF-003` | `frontend/src/components/StatusBadge.jsx`, `frontend/src/components/StatusTimeline.jsx` | `test/scms_15_status_display.test.js` | **Verified (3/3)** | `feature/SCMS-15-status-display` / [#16](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/16) | Awaiting Peer Review |
+| **`SCMS-16`** | `SCMS-F-011`, `SCMS-NF-005` | `backend/routes/complaintRoutes.js` (`GET /api/complaints/:id/updates`), `backend/models/AuditLog.js` | `test/scms_16_complaint_updates.test.js` | **Verified (5/5)** | `feature/SCMS-16-complaint-updates` / [#17](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/17) | Awaiting Peer Review |
+| **`SCMS-17`** | `SCMS-F-012`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`POST /api/admin/login`), `frontend/src/components/AdminLoginModal.jsx` | `test/scms_17_admin_auth.test.js` | **Verified (5/5)** | `feature/SCMS-17-admin-auth` / [#18](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/18) | Awaiting Peer Review |
+| **`SCMS-18`** | `SCMS-F-013`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`GET /api/admin/complaints`), `frontend/src/components/ComplaintTable.jsx` | `test/scms_18_admin_complaint_list.test.js` | **Verified (4/4)** | `feature/SCMS-18-admin-complaint-list` / [#19](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/19) | Awaiting Peer Review |
+| **`SCMS-19`** | `SCMS-F-014`, `SCMS-SR-002` | `backend/routes/adminRoutes.js` (`GET /api/admin/complaints/:id`), `frontend/src/App.jsx` | `test/scms_19_admin_complaint_details.test.js` | **Verified (4/4)** | `feature/SCMS-19-admin-complaint-details` / [#20](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/20) | Awaiting Peer Review |
+| **`SCMS-25`** | `SCMS-SR-002`, `SCMS-NF-004` | `backend/middleware/authMiddleware.js` (`requireAdmin`), `backend/routes/adminRoutes.js` | `test/scms_25_admin_authorization.test.js` | **Verified (6/6)** | `feature/SCMS-25-admin-authorization` / [#21](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/21) | Awaiting Peer Review |
+| **`SCMS-27`** | `SCMS-SR-004`, `SCMS-NF-004` | `backend/routes/complaintRoutes.js` (ownership verification) | `test/scms_27_complaint_ownership.test.js` | **Verified (5/5)** | `feature/SCMS-27-complaint-ownership` / [#22](https://github.com/Smart-Complaint-Management-System/Smart-complaint-management-system/pull/22) | Awaiting Peer Review |
+
+---
+
+## 14. Integration Status
+
+### 14.1 Integrated Work on `sprint1-user-complaint`
+- All Sprint 1 functional user complaint features (`SCMS-F-001` through `SCMS-F-007` via PRs #3 through #9) are merged into base branch `sprint1-user-complaint`.
+- Sprint 1 security & usability verification items (`SCMS-SEC-001`, `SCMS-SEC-003`, `SCMS-NFR-003` via PRs #11, #12, #13) are implemented, verified, and open on `sprint1-user-complaint`.
+
+### 14.2 Work Awaiting Peer Review on Feature Branches
+- All 9 Sprint 2 feature branches (`feature/SCMS-13-my-complaints` through `feature/SCMS-27-complaint-ownership`) are pushed to remote `origin` and have pull requests (PRs #14 to #22) open against `sprint1-user-complaint`.
+- The code for these 9 stories is **not yet merged** into `sprint1-user-complaint` or `main`, preserving the team's mandatory peer review and branch protection workflow.
+- PR #23 contains this complete documentation package under `docs/sprint-2-sicd`.
+
+---
+
+## 15. Revision History
+
+| Revision | Date | Author | Description of Changes |
+| :---: | :---: | :--- | :--- |
+| `1.0.0` | 2026-10-28 | Dhruva Ganesh Hegde | Initial release: Complete Sprint 2 architecture, component design, API specification, persistence schemas, security model, and test verification report. |
+| `1.1.0` | 2026-10-28 | Dhruva Ganesh Hegde | Added explicit Integration Status section (14) and Revision History (15); updated RTM with live PR URLs and review states. |
 
 ---
 
