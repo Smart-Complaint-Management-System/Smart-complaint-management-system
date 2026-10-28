@@ -4,6 +4,7 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 
 const adminRoutes = require("./routes/adminRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.get("/health", (req, res) => {
 
 // Admin complaint management routes
 app.use("/api/admin", adminRoutes);
+app.use("/api/user", userRoutes);
 
 // Handle malformed JSON request bodies
 app.use((err, req, res, next) => {
