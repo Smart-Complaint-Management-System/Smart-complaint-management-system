@@ -55,6 +55,11 @@ export async function getUserComplaintById(id) {
   return response.data;
 }
 
+export async function getComplaintUpdates(id) {
+  const response = await api.get(`/api/complaints/${id}/updates`);
+  return response.data;
+}
+
 // 4. Admin Complaint Management (Keertana M - SCMS-F-012 to F-015)
 export async function adminLogin(email, password) {
   const response = await api.post("/api/admin/login", {
