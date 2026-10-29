@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Complaint = require("../models/Complaint");
+const AuditLog = require("../models/AuditLog");
 const { requireAuth } = require("../middleware/authMiddleware");
 const { generateComplaintId } = require("../utils/helpers");
 
@@ -133,6 +134,57 @@ router.get("/:id", requireAuth, async (req, res) => {
     console.error("Fetch complaint detail error:", error.message);
     return res.status(500).json({
       message: "Failed to retrieve complaint details.",
+    });
+  }
+});
+
+// SCMS-F-011 / SCMS-US-011: View updates and responses for a complaint (SCMS-16)
+router.get("/:id/updates", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let query;
+    if (mongoose.isValidObjectId(id)) {
+      query = { _id: id };
+    } else {
+      query = { complaintId: id };
+    }
+
+    const complaint = await Complaint.findOne(query);
+
+    if (!complaint) {
+      return res.status(404).json({
+        message: "Complaint not found.",
+      });
+    }
+
+    // SCMS-SR-004: Ownership check
+    const isOwner =
+      complaint.submittedBy &&
+      complaint.submittedBy.toString() === req.user._id.toString();
+
+    if (!isOwner && req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Access denied. You do not have permission to view updates for this complaint.",
+      });
+    }
+
+    // Retrieve saved audit logs / status changes / resolution responses in chronological order
+    const updates = await AuditLog.find({ complaint: complaint._id })
+      .sort({ createdAt: 1 })
+      .populate("administrator", "name email");
+
+    return res.status(200).json({
+      complaintId: complaint.complaintId || complaint._id,
+      currentStatus: complaint.status,
+      resolution: complaint.resolution || "",
+      count: updates.length,
+      updates,
+    });
+  } catch (error) {
+    console.error("Fetch complaint updates error:", error.message);
+    return res.status(500).json({
+      message: "Failed to retrieve complaint updates.",
     });
   }
 });

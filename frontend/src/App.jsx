@@ -874,20 +874,22 @@ export default function App() {
         onLoginSuccess={handleUserLogin}
       />
 
-      <AdminLoginModal
-        isOpen={adminLoginOpen}
-        email={adminEmail}
-        setEmail={setAdminEmail}
-        password={adminPassword}
-        setPassword={setAdminPassword}
-        loading={loading}
-        error={error}
-        onLogin={handleAdminLogin}
-        onClose={() => {
-          setAdminLoginOpen(false);
-          setError("");
-        }}
-      />
+      {adminLoginOpen && (
+        <AdminLoginModal
+          isOpen={adminLoginOpen}
+          email={adminEmail}
+          setEmail={setAdminEmail}
+          password={adminPassword}
+          setPassword={setAdminPassword}
+          loading={loading}
+          error={error}
+          onLogin={handleAdminLogin}
+          onClose={() => {
+            setAdminLoginOpen(false);
+            setError("");
+          }}
+        />
+      )}
 
       {auditModalOpen && (
         <AuditTrailModal
