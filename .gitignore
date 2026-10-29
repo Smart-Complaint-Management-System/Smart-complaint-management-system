@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+coverage/
+.DS_Store
+*.log
+testplan_extracted.txt
+srs_extracted.txt
+arch_extracted.txt
+
