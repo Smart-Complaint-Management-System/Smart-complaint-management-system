@@ -1,5 +1,6 @@
 
 export default function Detail({ label, value }) {
+  // Displays a labeled detail and a fallback when the value is missing.
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
