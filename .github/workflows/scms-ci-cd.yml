@@ -26,10 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    defaults:
-      run:
-        working-directory: backend
-
     env:
       NODE_ENV: test
       JWT_SECRET: scms-automated-ci-pipeline-token-secret-pes-group8
@@ -43,12 +39,12 @@ jobs:
 
       - name: Ensure backend manifests and bootstrap files
         run: |
-          if [ ! -f "package.json" ]; then
+          if [ ! -f "backend/package.json" ]; then
             echo "backend/package.json not in current branch commit. Checking out bootstrap manifests from origin/main..."
-            git fetch origin main:refs/remotes/origin/main || true
+            git fetch origin main || true
             git checkout origin/main -- backend/package.json backend/package-lock.json backend/app.js backend/server.js 2>/dev/null || true
           fi
-          if [ ! -f "package.json" ]; then
+          if [ ! -f "backend/package.json" ]; then
             echo "Error: backend/package.json could not be resolved."
             exit 1
           fi
@@ -61,9 +57,11 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install backend dependencies reproducibly
+        working-directory: backend
         run: npm ci
 
       - name: Execute automated test suite (Sprint 1 + Sprint 2 + E2E)
+        working-directory: backend
         run: |
           echo "Running complete SCMS test suite across Sprint 1, Sprint 2, and Integration..."
           node --test test/*.test.js test/story_tests/*.test.js
@@ -73,10 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    defaults:
-      run:
-        working-directory: frontend
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,12 +79,12 @@ jobs:
 
       - name: Ensure frontend manifests and bootstrap files
         run: |
-          if [ ! -f "package.json" ]; then
+          if [ ! -f "frontend/package.json" ]; then
             echo "frontend/package.json not in current branch commit. Checking out bootstrap manifests from origin/main..."
-            git fetch origin main:refs/remotes/origin/main || true
-            git checkout origin/main -- frontend/package.json frontend/package-lock.json frontend/index.html frontend/vite.config.js 2>/dev/null || true
+            git fetch origin main || true
+            git checkout origin/main -- frontend/package.json frontend/package-lock.json frontend/index.html frontend/vite.config.js frontend/src/components/ 2>/dev/null || true
           fi
-          if [ ! -f "package.json" ]; then
+          if [ ! -f "frontend/package.json" ]; then
             echo "Error: frontend/package.json could not be resolved."
             exit 1
           fi
@@ -103,12 +97,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies reproducibly
+        working-directory: frontend
         run: npm ci
 
       - name: Run frontend lint checks
+        working-directory: frontend
         run: npm run lint
 
       - name: Compile frontend production bundle
+        working-directory: frontend
         run: npm run build
 
       - name: Upload frontend production artifact
