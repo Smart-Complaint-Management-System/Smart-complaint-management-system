@@ -272,7 +272,7 @@ test("Security: malformed bearer token is rejected", async () => {
 
   assert.equal(response.status, 401);
 });
-
+// Set the test secret before loading the application.
 test("Security: expired admin token is rejected", async () => {
   const expiredToken = jwt.sign(
     { userId: admin._id.toString() },
