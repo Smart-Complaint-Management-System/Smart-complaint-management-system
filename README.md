@@ -3,7 +3,8 @@
 **Course:** Software Engineering (UE24CS341A) — PES University  
 **Group:** 8  
 **Sprint 1 Delivery:** Full 4-Member Core Functional & Testing Implementation  
-**Sprint 2 Documentation:** [Sprint 2 SICD Report](docs/Sprint-2-SICD.md)
+**Sprint 2 Documentation:** [Sprint 2 SICD Report](docs/Sprint-2-SICD.md)  
+**CI/CD Pipeline:** [SCMS CI/CD Documentation](docs/CI_CD_PIPELINE.md)
 
 ---
 
@@ -20,11 +21,12 @@
 
 ## 🏗️ Architecture & Technology Stack
 
-- **Backend:** Node.js, Express.js (REST API architecture)
+- **Backend:** Node.js, Express.js (Modular REST API architecture)
 - **Database:** MongoDB with Mongoose ODM
 - **Authentication & Security:** JWT (JSON Web Tokens), bcryptjs password hashing (salt rounds $\ge 10$), role-based access control (RBAC), cross-user data isolation
 - **Frontend:** React 19, Vite, Tailwind CSS (User Portal, Complaint Submission, Status Tracking, Admin Triage Queue, Resolution & Closure, and Audit Logs)
 - **Automated Testing:** Node.js native test runner (`node:test`) + `supertest` + `mongodb-memory-server`
+- **CI/CD:** GitHub Actions automated matrix testing, linting, production build gating, and packaging
 
 ---
 
@@ -60,8 +62,8 @@
 - **`SCMS-NF-006` / `TC-NF-06`**: Modular maintainability and error isolation.
 
 ### 4. ShivaSwaroop D S — Complaint Resolution & Closure
-- **`SCMS-F-016` / `TC-RES-01` (`TC-ADM-05`)**: Admin provides resolution/response text (non-blank, max 2000 chars, trimmed, persisted).
-- **`SCMS-F-017` / `TC-RES-02` (`TC-ADM-06`)**: Admin transitions complaint to `Resolved` and `Closed`; closing without resolution is rejected; closed complaints are immutable.
+- **`SCMS-F-016` / `TC-RES-01` (`TC-ADM-05`)**: Admin provides resolution/response text. String must be non-blank, max 2000 characters, trimmed before saving.
+- **`SCMS-F-017` / `TC-RES-02` (`TC-ADM-06`)**: Status changes follow sequence `Submitted` $\rightarrow$ `In Progress` $\rightarrow$ `Resolved` $\rightarrow$ `Closed`. A saved resolution is required before transitioning to `Resolved` or `Closed`. Closed complaints cannot be modified.
 - **`SCMS-F-018` / `TC-RES-03` (`TC-ADM-07`)**: Concerned user views final resolution and `Closed` status.
 - **`SCMS-SR-005` / `TC-SEC-05`**: Admin action recording: status transitions and resolutions create immutable `AuditLog` records.
 - **`SCMS-NF-005` / `TC-NF-05`**: Reliability and persistence: saved records remain consistent across refreshes and queries.
@@ -81,6 +83,9 @@ cd backend
 # Copy sample environment configuration
 cp .env.example .env
 
+# Install dependencies
+npm ci
+
 # Start development server
 npm run dev
 
@@ -94,7 +99,7 @@ npm start
 cd frontend
 
 # Install dependencies
-npm install
+npm ci
 
 # Start Vite dev server
 npm run dev
@@ -108,6 +113,8 @@ npm run build
 ```bash
 cd backend
 npm run seed:admin
+# Or using createAdmin script:
+node createAdmin.js
 ```
 
 ---
@@ -119,15 +126,15 @@ All test cases are fully automated with in-memory MongoDB:
 ```bash
 cd backend
 
-# Run ALL 40 tests across all 4 modules and integration suite
+# Run ALL tests across all modules, story suites, and end-to-end lifecycle
 npm test
 
 # Run tests by team member module:
-npm run test:dhruva        # User Account & Complaint Submission (11 tests)
-npm run test:raksha        # Complaint Tracking & User Status (7 tests)
-npm run test:keertana      # Admin Complaint Management (9 tests)
-npm run test:shivaswaroop  # Complaint Resolution & Closure (7 tests)
-npm run test:e2e           # End-to-end integration lifecycle (AT-01 to AT-05)
+npm run test:dhruva        # User Account & Complaint Submission
+npm run test:raksha        # Complaint Tracking & User Status
+npm run test:keertana      # Admin Complaint Management
+npm run test:shivaswaroop  # Complaint Resolution & Closure
+npm run test:e2e           # End-to-end integration lifecycle
 ```
 
 ---
@@ -144,14 +151,15 @@ npm run test:e2e           # End-to-end integration lifecycle (AT-01 to AT-05)
 - `POST /api/complaints` — Submit a complaint (requires Auth)
 - `GET /api/complaints` — List current user's complaints (requires Auth)
 - `GET /api/complaints/:id` — View complaint status & details (requires Auth & ownership)
+- `GET /api/complaints/:id/updates` — View updates and responses for a complaint (requires Auth & ownership)
 
 ### Admin Management (`/api/admin`)
 - `POST /api/admin/login` — Administrator authentication
 - `GET /api/admin/complaints` — View all submitted complaints (requires Admin)
 - `GET /api/admin/complaints/:id` — View specific complaint details (requires Admin)
-- `PATCH /api/admin/complaints/:id/status` — Advance complaint status (requires Admin)
+- `PATCH /api/admin/complaints/:id/status` — Advance complaint status (`Submitted` $\rightarrow$ `In Progress` $\rightarrow$ `Resolved` $\rightarrow$ `Closed`)
 - `PATCH /api/admin/complaints/:id/resolution` — Enter resolution response (requires Admin)
 - `GET /api/admin/complaints/:id/audit-logs` — View complaint audit trail (requires Admin)
 
 ### System Health
-- `GET /health` / `GET /api/health` — System and database health status
+- `GET /health` or `GET /api/health` — System and database health status

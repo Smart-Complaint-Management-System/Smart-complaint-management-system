@@ -80,9 +80,10 @@ export async function getAdminComplaintById(id) {
 }
 
 export async function updateComplaintStatus(id, status) {
-  const response = await api.patch(`/api/admin/complaints/${id}/status`, {
-    status,
-  });
+  const response = await api.patch(
+    `/api/admin/complaints/${id}/status`,
+    { status }
+  );
   return response.data;
 }
 
@@ -105,4 +106,3 @@ export const getComplaints = getAdminComplaints;
 export const getComplaintById = getAdminComplaintById;
 
 export default api;
-

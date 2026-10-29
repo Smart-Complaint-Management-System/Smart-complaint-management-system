@@ -43,4 +43,3 @@ auditLogSchema.index({ complaint: 1, createdAt: -1 });
 auditLogSchema.index({ administrator: 1, createdAt: -1 });
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);
-

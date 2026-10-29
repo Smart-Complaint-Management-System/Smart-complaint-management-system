@@ -1,4 +1,3 @@
-
 import { useEffect } from "react";
 
 export default function AdminLoginModal({
@@ -90,7 +89,7 @@ export default function AdminLoginModal({
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+            className="w-full rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white hover:bg-blue-800 disabled:opacity-60 cursor-pointer"
           >
             {loading ? "Signing in…" : "Sign in"}
           </button>

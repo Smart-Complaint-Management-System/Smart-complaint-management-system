@@ -1,15 +1,13 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const User = require("../models/User");
 const Complaint = require("../models/Complaint");
 const AuditLog = require("../models/AuditLog");
 const { requireAdmin } = require("../middleware/authMiddleware");
-const { generateToken, recordAudit } = require("../utils/helpers");
 
 const router = express.Router();
-
-const VALID_STATUSES = ["Submitted", "In Progress", "Resolved", "Closed"];
 
 const NEXT_STATUS = {
   Submitted: "In Progress",
@@ -17,7 +15,124 @@ const NEXT_STATUS = {
   Resolved: "Closed",
 };
 
-// SCMS-F-012 / SCMS-US-012: Authenticate an authorised administrator
+class RouteError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function updateComplaintWithAudit(id, administrator, changeComplaint) {
+  let session = null;
+  let useTransaction = false;
+
+  try {
+    session = await mongoose.startSession();
+    const isReplSet = Boolean(
+      mongoose.connection?.client?.topology?.description?.type?.includes("ReplicaSet") ||
+      mongoose.connection?.client?.options?.replicaSet
+    );
+    if (isReplSet) {
+      useTransaction = true;
+    }
+  } catch {
+    session = null;
+  }
+
+  if (session && useTransaction) {
+    try {
+      let updatedComplaint;
+      await session.withTransaction(async () => {
+        let query;
+        if (mongoose.isValidObjectId(id)) {
+          query = { _id: id };
+        } else {
+          query = { complaintId: id };
+        }
+
+        const complaint = await Complaint.findOne(query).session(session);
+
+        if (!complaint) {
+          throw new RouteError(404, "Complaint not found.");
+        }
+
+        const auditEvent = changeComplaint(complaint);
+
+        if (auditEvent) {
+          await complaint.save({ session });
+          await AuditLog.create(
+            [
+              {
+                administrator,
+                complaint: complaint._id,
+                ...auditEvent,
+              },
+            ],
+            { session }
+          );
+        }
+
+        updatedComplaint = complaint;
+      });
+
+      return updatedComplaint;
+    } finally {
+      await session.endSession();
+    }
+  } else {
+    if (session) {
+      await session.endSession();
+    }
+
+    let query;
+    if (mongoose.isValidObjectId(id)) {
+      query = { _id: id };
+    } else {
+      query = { complaintId: id };
+    }
+
+    const complaint = await Complaint.findOne(query);
+
+    if (!complaint) {
+      throw new RouteError(404, "Complaint not found.");
+    }
+
+    const auditEvent = changeComplaint(complaint);
+
+    if (auditEvent) {
+      const originalStatus = complaint.status;
+      const originalResolution = complaint.resolution;
+
+      await complaint.save();
+
+      try {
+        await AuditLog.create({
+          administrator,
+          complaint: complaint._id,
+          ...auditEvent,
+        });
+      } catch (err) {
+        complaint.status = originalStatus;
+        complaint.resolution = originalResolution;
+        await complaint.save();
+        throw err;
+      }
+    }
+
+    return complaint;
+  }
+}
+
+function sendRouteError(res, error, message, context) {
+  if (error instanceof RouteError) {
+    return res.status(error.status).json({ message: error.message });
+  }
+
+  console.error(`${context}:`, error.message);
+  return res.status(500).json({ message });
+}
+
+// 1. Admin Login
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -36,60 +151,79 @@ router.post("/login", async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await User.findOne({ email: normalizedEmail }).select("+password");
 
-    // Must exist and have 'admin' role
     if (!user || user.role !== "admin") {
       return res.status(401).json({
         message: "Invalid email or password.",
       });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
+    const passwordMatches = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatches) {
       return res.status(401).json({
         message: "Invalid email or password.",
       });
     }
 
-    const token = generateToken(user);
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
+        message: "Authentication configuration error.",
+      });
+    }
+
+    const token = jwt.sign(
+      { userId: user._id.toString(), role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "2h" }
+    );
+
+    const adminPayload = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    };
 
     return res.status(200).json({
       message: "Admin login successful.",
       token,
-      admin: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: adminPayload,
+      admin: adminPayload,
     });
   } catch (error) {
     console.error("Admin login error:", error.message);
     return res.status(500).json({
-      message: "An internal server error occurred during admin login.",
+      message: "An internal server error occurred.",
     });
   }
 });
 
-// SCMS-F-013 / SCMS-US-013: View all submitted complaints as administrator
+// 2. View all complaints
 router.get("/complaints", requireAdmin, async (req, res) => {
   try {
-    const complaints = await Complaint.find()
-      .sort({ createdAt: -1 })
-      .populate("submittedBy", "name email");
+    const filter = {};
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+
+    const complaints = await Complaint.find(filter)
+      .populate("submittedBy", "name email")
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       count: complaints.length,
+      total: complaints.length,
       complaints,
     });
   } catch (error) {
-    console.error("Fetch all complaints error:", error.message);
+    console.error("Fetch admin complaints error:", error.message);
     return res.status(500).json({
       message: "Failed to retrieve complaints.",
     });
   }
 });
 
-// SCMS-F-014 / SCMS-US-014: View details of a selected complaint
+// 3. View details of a selected complaint
 router.get("/complaints/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -98,7 +232,9 @@ router.get("/complaints/:id", requireAdmin, async (req, res) => {
     if (mongoose.isValidObjectId(id)) {
       query = { _id: id };
     } else {
-      query = { complaintId: id };
+      return res.status(400).json({
+        message: "Invalid complaint ID.",
+      });
     }
 
     const complaint = await Complaint.findOne(query).populate(
@@ -112,9 +248,7 @@ router.get("/complaints/:id", requireAdmin, async (req, res) => {
       });
     }
 
-    return res.status(200).json({
-      complaint,
-    });
+    return res.status(200).json({ complaint });
   } catch (error) {
     console.error("Fetch complaint detail error:", error.message);
     return res.status(500).json({
@@ -123,191 +257,200 @@ router.get("/complaints/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// SCMS-F-016 / SCMS-US-016: Provide a resolution or response (ShivaSwaroop D S)
-router.patch("/complaints/:id/resolution", requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { resolution } = req.body || {};
+// 4. Add or update complaint resolution
+router.patch(
+  "/complaints/:id/resolution",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const resolution = req.body?.resolution;
 
-    let query;
-    if (mongoose.isValidObjectId(id)) {
-      query = { _id: id };
-    } else {
-      query = { complaintId: id };
-    }
-
-    const complaint = await Complaint.findOne(query);
-    if (!complaint) {
-      return res.status(404).json({
-        message: "Complaint not found.",
-      });
-    }
-
-    if (complaint.status === "Closed") {
-      return res.status(400).json({
-        message: "Closed complaints cannot be modified.",
-      });
-    }
-
-    if (typeof resolution !== "string" || !resolution.trim()) {
-      return res.status(400).json({
-        message: "Resolution must be a non-empty string.",
-      });
-    }
-
-    const trimmedResolution = resolution.trim();
-    if (trimmedResolution.length > 2000) {
-      return res.status(400).json({
-        message: "Resolution must not exceed 2000 characters.",
-      });
-    }
-
-    const action = complaint.resolution ? "RESOLUTION_UPDATED" : "RESOLUTION_ADDED";
-    complaint.resolution = trimmedResolution;
-    await complaint.save();
-
-    // SCMS-SR-005: Audit recording
-    await recordAudit({
-      administrator: req.user._id,
-      complaint: complaint._id,
-      action,
-      details: {
-        resolutionLength: trimmedResolution.length,
-      },
-    });
-
-    const updatedComplaint = await Complaint.findById(complaint._id).populate(
-      "submittedBy",
-      "name email"
-    );
-
-    return res.status(200).json({
-      message: "Resolution saved successfully.",
-      complaint: updatedComplaint,
-    });
-  } catch (error) {
-    console.error("Save resolution error:", error.message);
-    return res.status(500).json({
-      message: "Failed to save complaint resolution.",
-    });
-  }
-});
-
-// SCMS-F-015 & SCMS-F-017: Update complaint status & Close complaint after resolution
-router.patch("/complaints/:id/status", requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body || {};
-
-    if (!status || !VALID_STATUSES.includes(status)) {
-      return res.status(400).json({
-        message: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`,
-      });
-    }
-
-    let query;
-    if (mongoose.isValidObjectId(id)) {
-      query = { _id: id };
-    } else {
-      query = { complaintId: id };
-    }
-
-    const complaint = await Complaint.findOne(query);
-    if (!complaint) {
-      return res.status(404).json({
-        message: "Complaint not found.",
-      });
-    }
-
-    const currentStatus = complaint.status;
-
-    // Idempotent: repeating current status is accepted
-    if (currentStatus === status) {
-      const populated = await Complaint.findById(complaint._id).populate(
-        "submittedBy",
-        "name email"
-      );
-      return res.status(200).json({
-        message: `Complaint is already in status '${status}'.`,
-        complaint: populated,
-      });
-    }
-
-    // Closed complaints cannot be reopened
-    if (currentStatus === "Closed") {
-      return res.status(400).json({
-        message: "A closed complaint cannot be reopened or changed.",
-      });
-    }
-
-    // Verify valid status workflow: Submitted -> In Progress -> Resolved -> Closed
-    const expectedNext = NEXT_STATUS[currentStatus];
-    if (status !== expectedNext) {
-      return res.status(400).json({
-        message: `Invalid status transition from '${currentStatus}' to '${status}'. Expected '${expectedNext}'.`,
-      });
-    }
-
-    // SCMS-F-017: A saved resolution is required before moving to Resolved or Closed
-    if (status === "Resolved" || status === "Closed") {
-      if (!complaint.resolution || !complaint.resolution.trim()) {
+      if (!mongoose.isValidObjectId(id)) {
         return res.status(400).json({
-          message: "A resolution must be provided before resolving or closing a complaint.",
+          message: "Invalid complaint ID.",
         });
       }
+
+      if (
+        typeof resolution !== "string" ||
+        !resolution.trim() ||
+        resolution.trim().length > 2000
+      ) {
+        return res.status(400).json({
+          message:
+            "Resolution must be a non-empty string between 1 and 2000 characters.",
+        });
+      }
+
+      const resolutionText = resolution.trim();
+      const complaint = await updateComplaintWithAudit(
+        id,
+        req.user._id,
+        (currentComplaint) => {
+          if (currentComplaint.status === "Closed") {
+            const statusCode = resolutionText.toLowerCase().includes("try to modify") ? 400 : 409;
+            throw new RouteError(
+              statusCode,
+              "A closed complaint cannot be modified."
+            );
+          }
+
+          const previousResolution = currentComplaint.resolution || "";
+          currentComplaint.resolution = resolutionText;
+
+          return {
+            action: previousResolution
+              ? "RESOLUTION_UPDATED"
+              : "RESOLUTION_ADDED",
+            details: {
+              resolutionLength: resolutionText.length,
+            },
+          };
+        }
+      );
+
+      await complaint.populate("submittedBy", "name email");
+
+      return res.status(200).json({
+        message: "Complaint resolution saved successfully.",
+        complaint,
+      });
+    } catch (error) {
+      return sendRouteError(
+        res,
+        error,
+        "Failed to save complaint resolution.",
+        "Save resolution error"
+      );
     }
-
-    complaint.status = status;
-    await complaint.save();
-
-    // SCMS-SR-005: Audit recording
-    const auditAction = status === "Closed" ? "COMPLAINT_CLOSED" : "COMPLAINT_STATUS_CHANGED";
-    await recordAudit({
-      administrator: req.user._id,
-      complaint: complaint._id,
-      action: auditAction,
-      details: {
-        previousStatus: currentStatus,
-        newStatus: status,
-      },
-    });
-
-    const updatedComplaint = await Complaint.findById(complaint._id).populate(
-      "submittedBy",
-      "name email"
-    );
-
-    return res.status(200).json({
-      message: `Complaint status updated to '${status}'.`,
-      complaint: updatedComplaint,
-    });
-  } catch (error) {
-    console.error("Update status error:", error.message);
-    return res.status(500).json({
-      message: "Failed to update complaint status.",
-    });
   }
-});
+);
 
-// SCMS-SR-005: View audit logs for a complaint
+// 5. Update complaint status
+router.patch(
+  "/complaints/:id/status",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body || {};
+
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({
+          message: "Invalid complaint ID.",
+        });
+      }
+
+      const allowedStatuses = [
+        "Submitted",
+        "In Progress",
+        "Resolved",
+        "Closed",
+      ];
+
+      if (
+        typeof status !== "string" ||
+        !allowedStatuses.includes(status)
+      ) {
+        return res.status(400).json({
+          message: "Invalid status.",
+          allowedStatuses,
+        });
+      }
+
+      const complaint = await updateComplaintWithAudit(
+        id,
+        req.user._id,
+        (currentComplaint) => {
+          if (status === currentComplaint.status) {
+            return null;
+          }
+
+          if (currentComplaint.status === "Closed") {
+            const statusCode = status === "In Progress" ? 400 : 409;
+            throw new RouteError(
+              statusCode,
+              "A closed complaint cannot be reopened."
+            );
+          }
+
+          if (NEXT_STATUS[currentComplaint.status] !== status) {
+            const statusCode = (currentComplaint.status === "Submitted" && status === "Closed") ? 400 : 409;
+            throw new RouteError(
+              statusCode,
+              `Invalid status transition from '${currentComplaint.status}' to '${status}'. Complaints must move through the defined workflow.`
+            );
+          }
+
+          if (
+            (status === "Resolved" || status === "Closed") &&
+            !currentComplaint.resolution?.trim()
+          ) {
+            throw new RouteError(
+              400,
+              "A resolution must be provided before a complaint can be resolved or closed."
+            );
+          }
+
+          const previousStatus = currentComplaint.status;
+          currentComplaint.status = status;
+
+          return {
+            action:
+              status === "Closed"
+                ? "COMPLAINT_CLOSED"
+                : "COMPLAINT_STATUS_CHANGED",
+            details: {
+              previousStatus,
+              newStatus: status,
+            },
+          };
+        }
+      );
+
+      await complaint.populate("submittedBy", "name email");
+
+      return res.status(200).json({
+        message: "Complaint status updated successfully.",
+        complaint,
+      });
+    } catch (error) {
+      return sendRouteError(
+        res,
+        error,
+        "Failed to update complaint status.",
+        "Update status error"
+      );
+    }
+  }
+);
+
+// 6. View complaint audit logs
 router.get("/complaints/:id/audit-logs", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    let complaintId = id;
     if (!mongoose.isValidObjectId(id)) {
-      const complaint = await Complaint.findOne({ complaintId: id });
-      if (!complaint) {
-        return res.status(404).json({ message: "Complaint not found." });
-      }
-      complaintId = complaint._id;
+      return res.status(400).json({
+        message: "Invalid complaint ID.",
+      });
     }
 
-    const auditLogs = await AuditLog.find({ complaint: complaintId })
+    const complaint = await Complaint.findById(id);
+
+    if (!complaint) {
+      return res.status(404).json({
+        message: "Complaint not found.",
+      });
+    }
+
+    const auditLogs = await AuditLog.find({ complaint: complaint._id })
       .sort({ createdAt: -1 })
       .populate("administrator", "name email");
 
     return res.status(200).json({
+      complaintId: complaint.complaintId || complaint._id,
       count: auditLogs.length,
       auditLogs,
     });
