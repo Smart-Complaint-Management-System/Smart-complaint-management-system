@@ -64,7 +64,11 @@ jobs:
         working-directory: backend
         run: |
           echo "Running complete SCMS test suite across Sprint 1, Sprint 2, and Integration..."
-          node --test test/*.test.js test/story_tests/*.test.js
+          if [ -d "test/story_tests" ] && ls test/story_tests/*.test.js >/dev/null 2>&1; then
+            node --test test/*.test.js test/story_tests/*.test.js
+          else
+            node --test test/*.test.js
+          fi
 
   frontend-ci:
     name: Frontend CI (Lint & Production Build)

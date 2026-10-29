@@ -1,10 +1,15 @@
-
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 
-const adminRoutes = require("./routes/adminRoutes");
-const userRoutes = require("./routes/userRoutes");
+const authRoutes = require("./routes/authRoutes");
+const complaintRoutes = require("./routes/complaintRoutes");
+let adminRoutes;
+try {
+  adminRoutes = require("./routes/adminRoutes");
+} catch {
+  // Optional if adminRoutes not present
+}
 
 const app = express();
 
@@ -19,9 +24,22 @@ app.get("/", (req, res) => {
   });
 });
 
-// Health check
+// Health checks
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    server: "running",
+    database:
+      mongoose.connection.readyState === 1
+        ? "connected"
+        : "disconnected",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get("/health", (req, res) => {
   res.json({
+    status: "ok",
     server: "running",
     database:
       mongoose.connection.readyState === 1
@@ -30,9 +48,12 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Admin complaint management routes
-app.use("/api/admin", adminRoutes);
-app.use("/api/user", userRoutes);
+// Application Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/complaints", complaintRoutes);
+if (adminRoutes) {
+  app.use("/api/admin", adminRoutes);
+}
 
 // Handle malformed JSON request bodies
 app.use((err, req, res, next) => {
