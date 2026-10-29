@@ -8,14 +8,12 @@ const auditLogSchema = new mongoose.Schema(
       required: true,
       immutable: true,
     },
-
     complaint: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Complaint",
       required: true,
       immutable: true,
     },
-
     action: {
       type: String,
       enum: [
@@ -27,7 +25,6 @@ const auditLogSchema = new mongoose.Schema(
       required: true,
       immutable: true,
     },
-
     details: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

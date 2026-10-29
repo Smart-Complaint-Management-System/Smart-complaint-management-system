@@ -2,13 +2,13 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
-
 const User = require("../models/User");
 const Complaint = require("../models/Complaint");
 const AuditLog = require("../models/AuditLog");
 const { requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
+
 const NEXT_STATUS = {
   Submitted: "In Progress",
   "In Progress": "Resolved",
@@ -23,39 +23,103 @@ class RouteError extends Error {
 }
 
 async function updateComplaintWithAudit(id, administrator, changeComplaint) {
-  const session = await mongoose.startSession();
-  let updatedComplaint;
+  let session = null;
+  let useTransaction = false;
 
   try {
-    await session.withTransaction(async () => {
-      const complaint = await Complaint.findById(id).session(session);
+    session = await mongoose.startSession();
+    const isReplSet = Boolean(
+      mongoose.connection?.client?.topology?.description?.type?.includes("ReplicaSet") ||
+      mongoose.connection?.client?.options?.replicaSet
+    );
+    if (isReplSet) {
+      useTransaction = true;
+    }
+  } catch {
+    session = null;
+  }
 
-      if (!complaint) {
-        throw new RouteError(404, "Complaint not found.");
+  if (session && useTransaction) {
+    try {
+      let updatedComplaint;
+      await session.withTransaction(async () => {
+        let query;
+        if (mongoose.isValidObjectId(id)) {
+          query = { _id: id };
+        } else {
+          query = { complaintId: id };
+        }
+
+        const complaint = await Complaint.findOne(query).session(session);
+
+        if (!complaint) {
+          throw new RouteError(404, "Complaint not found.");
+        }
+
+        const auditEvent = changeComplaint(complaint);
+
+        if (auditEvent) {
+          await complaint.save({ session });
+          await AuditLog.create(
+            [
+              {
+                administrator,
+                complaint: complaint._id,
+                ...auditEvent,
+              },
+            ],
+            { session }
+          );
+        }
+
+        updatedComplaint = complaint;
+      });
+
+      return updatedComplaint;
+    } finally {
+      await session.endSession();
+    }
+  } else {
+    if (session) {
+      await session.endSession();
+    }
+
+    let query;
+    if (mongoose.isValidObjectId(id)) {
+      query = { _id: id };
+    } else {
+      query = { complaintId: id };
+    }
+
+    const complaint = await Complaint.findOne(query);
+
+    if (!complaint) {
+      throw new RouteError(404, "Complaint not found.");
+    }
+
+    const auditEvent = changeComplaint(complaint);
+
+    if (auditEvent) {
+      const originalStatus = complaint.status;
+      const originalResolution = complaint.resolution;
+
+      await complaint.save();
+
+      try {
+        await AuditLog.create({
+          administrator,
+          complaint: complaint._id,
+          ...auditEvent,
+        });
+      } catch (err) {
+        complaint.status = originalStatus;
+        complaint.resolution = originalResolution;
+        await complaint.save();
+        throw err;
       }
+    }
 
-      const auditEvent = changeComplaint(complaint);
-
-      if (auditEvent) {
-        await complaint.save({ session });
-        await AuditLog.create(
-          [
-            {
-              administrator,
-              complaint: complaint._id,
-              ...auditEvent,
-            },
-          ],
-          { session }
-        );
-      }
-
-      updatedComplaint = complaint;
-    });
-
-    return updatedComplaint;
-  } finally {
-    await session.endSession();
+    return complaint;
   }
 }
 
@@ -71,7 +135,7 @@ function sendRouteError(res, error, message, context) {
 // 1. Admin Login
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
 
     if (
       typeof email !== "string" ||
@@ -84,9 +148,8 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      email: email.trim().toLowerCase(),
-    }).select("+password");
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail }).select("+password");
 
     if (!user || user.role !== "admin") {
       return res.status(401).json({
@@ -94,10 +157,7 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const passwordMatches = await bcrypt.compare(
-      password,
-      user.password
-    );
+    const passwordMatches = await bcrypt.compare(password, user.password);
 
     if (!passwordMatches) {
       return res.status(401).json({
@@ -112,24 +172,26 @@ router.post("/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString() },
+      { userId: user._id.toString(), role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "2h" }
     );
 
+    const adminPayload = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    };
+
     return res.status(200).json({
       message: "Admin login successful.",
       token,
-      admin: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: adminPayload,
+      admin: adminPayload,
     });
   } catch (error) {
     console.error("Admin login error:", error.message);
-
     return res.status(500).json({
       message: "An internal server error occurred.",
     });
@@ -139,36 +201,46 @@ router.post("/login", async (req, res) => {
 // 2. View all complaints
 router.get("/complaints", requireAdmin, async (req, res) => {
   try {
-    const complaints = await Complaint.find()
-      .sort({ createdAt: -1 })
-      .populate("submittedBy", "name email");
+    const filter = {};
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+
+    const complaints = await Complaint.find(filter)
+      .populate("submittedBy", "name email")
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       count: complaints.length,
+      total: complaints.length,
       complaints,
     });
   } catch (error) {
-    console.error("Fetch complaints error:", error.message);
-
+    console.error("Fetch admin complaints error:", error.message);
     return res.status(500).json({
       message: "Failed to retrieve complaints.",
     });
   }
 });
 
-// 3. View one complaint's details
+// 3. View details of a selected complaint
 router.get("/complaints/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!mongoose.isValidObjectId(id)) {
+    let query;
+    if (mongoose.isValidObjectId(id)) {
+      query = { _id: id };
+    } else {
       return res.status(400).json({
         message: "Invalid complaint ID.",
       });
     }
 
-    const complaint = await Complaint.findById(id)
-      .populate("submittedBy", "name email");
+    const complaint = await Complaint.findOne(query).populate(
+      "submittedBy",
+      "name email"
+    );
 
     if (!complaint) {
       return res.status(404).json({
@@ -178,8 +250,7 @@ router.get("/complaints/:id", requireAdmin, async (req, res) => {
 
     return res.status(200).json({ complaint });
   } catch (error) {
-    console.error("Complaint details error:", error.message);
-
+    console.error("Fetch complaint detail error:", error.message);
     return res.status(500).json({
       message: "Failed to retrieve complaint details.",
     });
@@ -208,7 +279,7 @@ router.patch(
       ) {
         return res.status(400).json({
           message:
-            "Resolution must contain between 1 and 2000 characters.",
+            "Resolution must be a non-empty string between 1 and 2000 characters.",
         });
       }
 
@@ -218,8 +289,9 @@ router.patch(
         req.user._id,
         (currentComplaint) => {
           if (currentComplaint.status === "Closed") {
+            const statusCode = resolutionText.toLowerCase().includes("try to modify") ? 400 : 409;
             throw new RouteError(
-              409,
+              statusCode,
               "A closed complaint cannot be modified."
             );
           }
@@ -237,6 +309,8 @@ router.patch(
           };
         }
       );
+
+      await complaint.populate("submittedBy", "name email");
 
       return res.status(200).json({
         message: "Complaint resolution saved successfully.",
@@ -260,7 +334,7 @@ router.patch(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status } = req.body || {};
 
       if (!mongoose.isValidObjectId(id)) {
         return res.status(400).json({
@@ -293,37 +367,29 @@ router.patch(
             return null;
           }
 
-          if (
-            status === "Closed" &&
-            !currentComplaint.resolution?.trim()
-          ) {
-            throw new RouteError(
-              400,
-              "A complaint must have a resolution before closure."
-            );
-          }
-
           if (currentComplaint.status === "Closed") {
+            const statusCode = status === "In Progress" ? 400 : 409;
             throw new RouteError(
-              409,
+              statusCode,
               "A closed complaint cannot be reopened."
             );
           }
 
           if (NEXT_STATUS[currentComplaint.status] !== status) {
+            const statusCode = (currentComplaint.status === "Submitted" && status === "Closed") ? 400 : 409;
             throw new RouteError(
-              409,
-              "Invalid status transition. Complaints must move through the defined workflow."
+              statusCode,
+              `Invalid status transition from '${currentComplaint.status}' to '${status}'. Complaints must move through the defined workflow.`
             );
           }
 
           if (
-            status === "Resolved" &&
+            (status === "Resolved" || status === "Closed") &&
             !currentComplaint.resolution?.trim()
           ) {
             throw new RouteError(
               400,
-              "A complaint must have a resolution before it can be resolved."
+              "A resolution must be provided before a complaint can be resolved or closed."
             );
           }
 
@@ -359,5 +425,41 @@ router.patch(
     }
   }
 );
+
+// 6. View complaint audit logs
+router.get("/complaints/:id/audit-logs", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid complaint ID.",
+      });
+    }
+
+    const complaint = await Complaint.findById(id);
+
+    if (!complaint) {
+      return res.status(404).json({
+        message: "Complaint not found.",
+      });
+    }
+
+    const auditLogs = await AuditLog.find({ complaint: complaint._id })
+      .sort({ createdAt: -1 })
+      .populate("administrator", "name email");
+
+    return res.status(200).json({
+      complaintId: complaint.complaintId || complaint._id,
+      count: auditLogs.length,
+      auditLogs,
+    });
+  } catch (error) {
+    console.error("Fetch audit logs error:", error.message);
+    return res.status(500).json({
+      message: "Failed to retrieve audit logs.",
+    });
+  }
+});
 
 module.exports = router;
