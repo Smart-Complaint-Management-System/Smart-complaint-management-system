@@ -19,7 +19,7 @@ const userSchema = new mongoose.Schema(
       required: [true, "Password is required"],
       select: false, // Ensures password hash is never included by default in query results
     },
-    role: {
+    role: {          // Defines whether the account belongs to a regular user or an administrator.
       type: String,
       enum: ["user", "admin"],
       default: "user",
