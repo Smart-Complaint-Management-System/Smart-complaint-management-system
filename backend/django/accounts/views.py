@@ -80,4 +80,3 @@ class PasswordChangeView(APIView):
         revoke_user_tokens(user)
         return Response({"detail": "Password updated. Sign in again to continue."})
 
-

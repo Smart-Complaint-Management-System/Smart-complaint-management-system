@@ -135,4 +135,3 @@ class ManagedUserSerializer(UserSummarySerializer):
                 user=user,
                 defaults={"department": department},
             )
-
