@@ -1,26 +1,50 @@
-# Dependencies
-node_modules/
-frontend/node_modules/
-backend/node_modules/
-
-# Environment secrets
-.env
-.env.*
+# Environment files and secrets
+.env*
 !.env.example
-backend/.env
-frontend/.env
-frontend/.env.local
+!**/.env.example
 
-# Build output
+# Python and Django
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+staticfiles/
+media/
+*.sqlite3
+*.sqlite3-*
+db.sqlite3
+*.db
+
+# Node.js and frontend builds
+node_modules/
 dist/
-frontend/dist/
-
-# Test coverage & Temporary files
+dist-ssr/
 coverage/
-.DS_Store
-*.log
 npm-debug.log*
-backend/mongodb-debug.txt
-testplan_extracted.txt
-srs_extracted.txt
-arch_extracted.txt
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Logs, temporary files, and editor/OS metadata
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
