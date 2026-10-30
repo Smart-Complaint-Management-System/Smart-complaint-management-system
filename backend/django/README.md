@@ -1,6 +1,6 @@
 # Django backend foundation
 
-This directory contains the Django API foundation and Phase 2 account, role, and department management. It lives beside the existing Express backend under `backend/`; the Express service and React frontend remain unchanged.
+This directory contains the Django REST API for account, department, complaint, assignment, priority, audit, notification, and dashboard workflows. The original Express backend remains in `backend/` for rollback and migration validation. The React frontend uses Django by default and can be pointed elsewhere with `VITE_API_URL`.
 
 ## Requirements
 
@@ -76,4 +76,44 @@ Super admins can assign all four roles. Department admins can create employees o
 
 Department admins and employees are linked to a department through their role profile. API querysets are scoped in the backend, and cross-department detail requests return `404`. The authorization rules do not depend on frontend visibility.
 
-The current phase does not add complaint or assigned-work APIs. Those routes and their data models are planned for later phases.
+## Complaint and department routing APIs
+
+| Method | Path | Access |
+|---|---|---|
+| `GET`, `POST` | `/api/complaints` | Authenticated; users list own complaints and can submit; staff see scoped records |
+| `GET`, `PATCH` | `/api/complaints/{id-or-complaint-id}` | Owner, assigned employee, matching department admin, or super admin |
+| `GET` | `/api/complaints/{id}/updates` | Same visibility as complaint details |
+| `GET`, `POST` | `/api/complaints/{id}/attachments` | Visible user; file validation and role checks apply |
+| `GET` | `/api/admin/complaints` | Super admin organization-wide; department admin own department |
+| `GET` | `/api/admin/complaints/unassigned` | Super admin only |
+| `PATCH` | `/api/admin/complaints/{id}/status` | Complaint managers; lifecycle validation applies |
+| `PATCH` | `/api/admin/complaints/{id}/resolution` | Complaint managers |
+| `PATCH` | `/api/admin/complaints/{id}/priority` | Complaint managers; reason required and safety protections apply |
+| `PATCH` | `/api/admin/complaints/{id}/department` | Super admin only; reason required |
+| `POST` | `/api/admin/complaints/{id}/reopen` | Super admin only; reason required |
+| `GET`, `POST`, `PATCH`, `DELETE` | `/api/categories/` | Authenticated read; super admin manages mappings (delete deactivates) |
+| `GET`, `PATCH` | `/api/priority-policy` | Manager read; super admin configures |
+
+Category mappings route incoming categories on the server. Unmapped categories enter the super-admin review queue. Department data from client submissions is ignored. Legacy response aliases (`_id`, `complaintId`, `submittedBy`) remain available to existing React components.
+
+## Work, dashboards, audit, and notifications
+
+| Method | Path | Access |
+|---|---|---|
+| `GET`, `POST` | `/api/assignments` | Managers view scoped assignments and assign employees |
+| `GET` | `/api/assignments/me` | Employee's own work history |
+| `POST` | `/api/assignments/{id}/accept`, `/progress`, `/complete` | Assigned employee only |
+| `POST` | `/api/assignments/{id}/verify`, `/reassign` | Matching department admin or super admin |
+| `POST` | `/api/assignments/{id}/evidence` | Assigned employee |
+| `GET` | `/api/assignments/workload` | Manager; department scoped |
+| `GET` | `/api/dashboard/summary` | Role-specific, database-backed data |
+| `GET` | `/api/dashboard/employees/{id}` | Super admin, same department admin, or that employee |
+| `GET` | `/api/audit-events` | Role-scoped immutable activity records |
+| `GET` | `/api/notifications` | Authenticated recipient only |
+| `POST` | `/api/notifications/read-all`, `/api/notifications/{id}/read` | Recipient only |
+
+Priority uses configurable transparent rule-based scores; it does not use machine learning. Complaint lifecycle is `Submitted` → `Assigned` → `Accepted` → `In Progress` → `Work Completed` → `Resolved` → `Closed`, with the legacy manager status endpoint retained. Resolution is required before resolve or close. Assignment history, status history, audit events, and notifications are stored in Django.
+
+## MongoDB migration (separate, not run)
+
+No MongoDB credentials are required for local development, and no production database migration has been executed. The original Express backend and MongoDB remain available. See [`../../docs/MONGODB_TO_DJANGO_MIGRATION.md`](../../docs/MONGODB_TO_DJANGO_MIGRATION.md) for source schema inventory, export/import sequencing, reconciliation checks, rollback, and cutover gates. Run migrations only against an explicitly selected and backed-up Django database.

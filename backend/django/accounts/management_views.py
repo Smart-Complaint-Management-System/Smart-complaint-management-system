@@ -15,6 +15,7 @@ from accounts.role_management import ManagedUserSerializer
 from accounts.roles import UserRole, department_for_user, has_role
 from accounts.serializers import UserSummarySerializer
 from accounts.token_utils import revoke_user_tokens
+from audit.services import log_event
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -43,6 +44,21 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = ManagedUserSerializer(instance, data={"is_active": False}, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        log_event(actor=self.request.user, action="USER_DEACTIVATED", department=department_for_user(instance),
+                  previous_value={"is_active": True}, new_value={"is_active": False},
+                  metadata={"user_id": instance.pk, "email": instance.email, "role": instance.role})
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        log_event(actor=self.request.user, action="USER_CREATED", department=department_for_user(user),
+                  new_value={"user_id": user.pk, "email": user.email, "role": user.role})
+
+    def perform_update(self, serializer):
+        previous = {"role": serializer.instance.role, "is_active": serializer.instance.is_active}
+        user = serializer.save()
+        log_event(actor=self.request.user, action="USER_UPDATED", department=department_for_user(user),
+                  previous_value=previous, new_value={"role": user.role, "is_active": user.is_active},
+                  metadata={"user_id": user.pk, "email": user.email})
 
     def destroy(self, request, *args, **kwargs):
         self.perform_destroy(self.get_object())
@@ -79,6 +95,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         employee = serializer.save()
+        log_event(actor=request.user, action="EMPLOYEE_CREATED", department=employee.department,
+                  new_value={"employee_id": employee.user_id, "department_id": employee.department_id})
         return Response(EmployeeProfileSerializer(employee).data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -87,6 +105,9 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         employee = serializer.save()
+        log_event(actor=request.user, action="EMPLOYEE_UPDATED", department=employee.department,
+                  new_value={"employee_id": employee.user_id, "department_id": employee.department_id,
+                             "job_title": employee.job_title})
         return Response(EmployeeProfileSerializer(employee).data)
 
     @action(detail=False, methods=["get"], url_path="me")
@@ -97,10 +118,29 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self.check_object_permissions(request, employee)
         return Response(EmployeeProfileSerializer(employee).data)
 
+    @action(detail=True, methods=["patch"], url_path="status")
+    def status(self, request, pk=None):
+        employee = self.get_object()
+        active = request.data.get("is_active")
+        if not isinstance(active, bool):
+            raise ValidationError({"is_active": "Provide a boolean value."})
+        previous = employee.user.is_active
+        employee.user.is_active = active
+        employee.user.save(update_fields=["is_active"])
+        if not active:
+            revoke_user_tokens(employee.user)
+        log_event(actor=request.user, action="EMPLOYEE_ACTIVATED" if active else "EMPLOYEE_DEACTIVATED",
+                  department=employee.department, previous_value={"is_active": previous},
+                  new_value={"is_active": active}, metadata={"employee_id": employee.user_id})
+        return Response(EmployeeProfileSerializer(employee).data)
+
     def perform_destroy(self, instance):
         instance.user.is_active = False
         instance.user.save(update_fields=["is_active"])
         revoke_user_tokens(instance.user)
+        log_event(actor=self.request.user, action="EMPLOYEE_DEACTIVATED", department=instance.department,
+                  previous_value={"is_active": True}, new_value={"is_active": False},
+                  metadata={"employee_id": instance.user_id})
 
     def destroy(self, request, *args, **kwargs):
         self.perform_destroy(self.get_object())

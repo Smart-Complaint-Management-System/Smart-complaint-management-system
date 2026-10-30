@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getCategories } from "../services/api";
 
 const CATEGORIES = [
   "Infrastructure",
@@ -19,6 +20,14 @@ export default function SubmitComplaintForm({ onSubmitComplaint, onViewMyComplai
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [submittedComplaint, setSubmittedComplaint] = useState(null);
+  const [categories, setCategories] = useState(CATEGORIES);
+
+  useEffect(() => {
+    getCategories().then((rows) => {
+      const configured = rows.map((row) => row.category).filter(Boolean);
+      if (configured.length) setCategories(configured);
+    }).catch(() => {});
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -131,7 +140,7 @@ export default function SubmitComplaintForm({ onSubmitComplaint, onViewMyComplai
             onChange={(e) => setCategory(e.target.value)}
             className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           >
-            {CATEGORIES.map((cat) => (
+            {categories.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
               </option>
