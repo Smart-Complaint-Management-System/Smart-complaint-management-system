@@ -1,16 +1,24 @@
-# React + Vite
+# React frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The existing React 19/Vite application talks to the Django API by default. It includes regular-user complaint submission and tracking, Super Admin and department-admin views, employee work updates, and organization management.
 
-Currently, two official plugins are available:
+## Local setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the `frontend/` directory:
 
-## React Compiler
+```powershell
+npm ci
+Copy-Item .env.example .env.local
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Vite serves the frontend at `http://localhost:5173`. `VITE_API_URL` defaults to `http://localhost:8000`; set it in `.env.local` only when Django runs at a different address. Django's `CORS_ALLOWED_ORIGINS` must include the browser origin.
 
-## Expanding the Oxlint configuration
+## Checks
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project
+```powershell
+npm run lint
+npm run build
+```
+
+The package currently has no separate frontend test script. Backend endpoint and permission tests live in the Django applications; use `python manage.py test` from `backend/django/`.

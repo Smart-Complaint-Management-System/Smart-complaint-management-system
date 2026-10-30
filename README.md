@@ -21,11 +21,11 @@
 
 ## 🏗️ Architecture & Technology Stack
 
-- **Backend:** Node.js, Express.js (Modular REST API architecture)
-- **Database:** MongoDB with Mongoose ODM
-- **Authentication & Security:** JWT (JSON Web Tokens), bcryptjs password hashing (salt rounds $\ge 10$), role-based access control (RBAC), cross-user data isolation
-- **Frontend:** React 19, Vite, Tailwind CSS (User Portal, Complaint Submission, Status Tracking, Admin Triage Queue, Resolution & Closure, and Audit Logs)
-- **Automated Testing:** Node.js native test runner (`node:test`) + `supertest` + `mongodb-memory-server`
+- **Current backend:** Django REST Framework with PostgreSQL configuration and SQLite local development
+- **Legacy backend:** Express/Mongoose and MongoDB retained for rollback and migration validation
+- **Authentication & Security:** JWT, custom Django users, role-based access control, and department scoping
+- **Frontend:** React 19, Vite, Tailwind CSS (user, administrator, and employee workflows)
+- **Automated Testing:** Django test suite plus the existing Express test suite
 - **CI/CD:** GitHub Actions automated matrix testing, linting, production build gating, and packaging
 
 ---
@@ -75,7 +75,36 @@
 
 ## 🚀 Getting Started
 
-### 1. Backend Setup
+### Current Django + React setup
+
+Use two terminals. The backend uses SQLite by default; configure `DATABASE_URL` in `backend/django/.env` for PostgreSQL. Replace the example signing key with a private random value before starting Django with `DJANGO_DEBUG=false`.
+
+```powershell
+cd backend/django
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env and set a private DJANGO_SECRET_KEY before continuing.
+python manage.py migrate
+python manage.py check
+python manage.py createsuperuser
+python manage.py runserver 8000
+```
+
+In another terminal:
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend defaults to `http://localhost:8000`. Set `VITE_API_URL` in `frontend/.env.local` to override it. Django's default CORS origins allow Vite on port 5173. Start by creating a Super Admin with `createsuperuser`; create department administrators and employees through the authenticated organization management UI.
+
+### Legacy Express setup (rollback and migration validation)
+
+These commands start the original Express service. They are retained for legacy verification and do not start the current React + Django application.
 
 ```bash
 cd backend
@@ -119,9 +148,9 @@ node createAdmin.js
 
 ---
 
-## 🧪 Running Automated Tests
+## 🧪 Legacy Express test suite
 
-All test cases are fully automated with in-memory MongoDB:
+The following commands exercise the original Express/MongoDB implementation. For the current Django application, run `python manage.py test` from `backend/django`; run `npm run lint` and `npm run build` from `frontend`.
 
 ```bash
 cd backend

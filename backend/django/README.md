@@ -16,11 +16,12 @@ python -m venv .venv
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 # macOS/Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
+Copy-Item .env.example .env
+# macOS/Linux: cp .env.example .env
 python manage.py migrate
 ```
 
-Set a private `DJANGO_SECRET_KEY` in `.env`. Without `DATABASE_URL`, Django uses a local SQLite database, so initial checks do not require PostgreSQL credentials. To use PostgreSQL, set a connection URL such as:
+Replace the example `DJANGO_SECRET_KEY` with a private random value before running Django with `DJANGO_DEBUG=false`; Django refuses to start in that mode with the placeholder or a missing key. `manage.py test` and `DJANGO_DEBUG=true` may use a development-only key. Without `DATABASE_URL`, Django uses a local SQLite database, so development does not require PostgreSQL credentials. To use PostgreSQL, set a connection URL such as:
 
 ```dotenv
 DATABASE_URL=postgres://scms:password@localhost:5432/scms
@@ -38,9 +39,9 @@ python manage.py runserver 8000
 
 The default department migration adds Electrical, Plumbing, Civil, Networking, and Housekeeping if they do not already exist. It never deletes department rows. `migrate` applies Django migrations to the database selected by `DATABASE_URL`; use a backed-up development database when applying migrations to an existing environment.
 
-## App boundaries
+## Django app responsibilities
 
-`accounts` contains the custom email-based user, employee and department-admin profiles, JWT authentication, role management, and backend permission classes. `departments` contains configurable department records. The `complaints`, `assignments`, `audit`, and `dashboard` apps remain scaffolds for later phases.
+`accounts` contains the custom email-based user, employee and department-admin profiles, JWT authentication, role management, and backend permission classes. `departments` contains configurable department records. `complaints` owns complaint lifecycle, routing, attachments, and priority. `assignments` owns employee work history and evidence. `audit` owns append-only activity records. `notifications` owns recipient-scoped in-app notices. `dashboard` provides role-scoped summaries.
 
 ## Authentication and profile APIs
 
