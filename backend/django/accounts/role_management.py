@@ -4,8 +4,8 @@ from django.db import transaction
 from rest_framework import serializers
 
 from accounts.models import DepartmentAdminProfile, EmployeeProfile
-from accounts.roles import UserRole
-from accounts.serializers import UserSummarySerializer, get_department_for_user
+from accounts.roles import UserRole, department_for_user
+from accounts.serializers import UserSummarySerializer
 from accounts.token_utils import revoke_user_tokens
 from departments.models import Department
 
@@ -54,7 +54,7 @@ class ManagedUserSerializer(UserSummarySerializer):
         role = attrs.get("role", self.instance.role if self.instance else UserRole.USER)
         department = attrs.get("department")
         if department is None and self.instance and role == self.instance.role:
-            department = get_department_for_user(self.instance)
+            department = department_for_user(self.instance)
 
         department_roles = (UserRole.DEPARTMENT_ADMIN, UserRole.EMPLOYEE)
         if role in department_roles and department is None:

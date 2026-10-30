@@ -3,20 +3,10 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from accounts.roles import UserRole
+from accounts.roles import UserRole, department_for_user
 from accounts.token_utils import issue_token_pair
 
 User = get_user_model()
-
-
-def get_department_for_user(user):
-    if user.role == UserRole.DEPARTMENT_ADMIN:
-        profile = getattr(user, "department_admin_profile", None)
-        return profile.department if profile else None
-    if user.role == UserRole.EMPLOYEE:
-        profile = getattr(user, "employee_profile", None)
-        return profile.department if profile else None
-    return None
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
@@ -27,7 +17,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
         fields = ("id", "name", "email", "role", "is_active", "department")
 
     def get_department(self, user):
-        department = get_department_for_user(user)
+        department = department_for_user(user)
         if not department:
             return None
         return {
@@ -79,7 +69,10 @@ class ProfileSerializer(serializers.ModelSerializer):
         return value
 
     def get_department(self, user):
-        return UserSummarySerializer(user).data["department"]
+        department = department_for_user(user)
+        if department is None:
+            return None
+        return {"id": department.id, "identifier": department.identifier, "name": department.name}
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
