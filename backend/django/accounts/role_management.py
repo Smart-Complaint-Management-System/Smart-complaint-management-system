@@ -53,6 +53,15 @@ class ManagedUserSerializer(UserSummarySerializer):
     def validate(self, attrs):
         role = attrs.get("role", self.instance.role if self.instance else UserRole.USER)
         department = attrs.get("department")
+        if "password" in attrs:
+            candidate = self.instance or User(
+                name=attrs.get("name", ""),
+                email=attrs.get("email", ""),
+            )
+            try:
+                password_validation.validate_password(attrs["password"], candidate)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"password": list(exc.messages)}) from exc
         if department is None and self.instance and role == self.instance.role:
             department = department_for_user(self.instance)
 
@@ -101,6 +110,7 @@ class ManagedUserSerializer(UserSummarySerializer):
         access_changed = (
             role != instance.role
             or validated_data.get("is_active", instance.is_active) != instance.is_active
+            or password is not None
         )
 
         for attribute, value in validated_data.items():

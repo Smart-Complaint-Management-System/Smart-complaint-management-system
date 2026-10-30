@@ -38,12 +38,15 @@ class RegistrationSerializer(serializers.Serializer):
             raise serializers.ValidationError("A user with this email already exists.")
         return value
 
-    def validate_password(self, value):
+    def validate(self, attrs):
         try:
-            password_validation.validate_password(value)
+            password_validation.validate_password(
+                attrs["password"],
+                User(name=attrs["name"], email=attrs["email"]),
+            )
         except DjangoValidationError as exc:
-            raise serializers.ValidationError(list(exc.messages)) from exc
-        return value
+            raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+        return attrs
 
     def create(self, validated_data):
         return User.objects.create_user(
