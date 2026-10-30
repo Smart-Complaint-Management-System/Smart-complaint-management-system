@@ -15,6 +15,16 @@ from accounts.serializers import (
     UserSummarySerializer,
 )
 from accounts.token_utils import issue_token_pair, revoke_user_tokens
+from audit.services import log_event
+
+
+def _record_login(response):
+    if response.status_code == status.HTTP_200_OK and response.data.get("user", {}).get("id"):
+        from accounts.models import User
+
+        actor = User.objects.filter(pk=response.data["user"]["id"]).first()
+        if actor:
+            log_event(actor=actor, action="USER_LOGIN", new_value={"email": actor.email})
 
 
 class RegistrationView(APIView):
@@ -36,6 +46,11 @@ class LoginView(TokenObtainPairView):
     permission_classes = [AllowAny]
     serializer_class = EmailTokenObtainPairSerializer
 
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        _record_login(response)
+        return response
+
 
 class AdminLoginView(LoginView):
     """Compatibility login route restricted to organization administrators."""
@@ -45,13 +60,16 @@ class AdminLoginView(LoginView):
         serializer.is_valid(raise_exception=True)
         if serializer.user.role not in (UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_ADMIN):
             raise AuthenticationFailed("Administrator access is required.")
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        _record_login(response)
+        return response
 
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        log_event(actor=request.user, action="USER_LOGOUT", new_value={"email": request.user.email})
         revoke_user_tokens(request.user)
         return Response({"detail": "Logged out."}, status=status.HTTP_200_OK)
 
