@@ -1,30 +1,37 @@
 # Django backend foundation
 
-This directory contains the Django REST API for account, department, complaint, assignment, priority, audit, notification, and dashboard workflows. The original Express backend remains in `backend/` for rollback and migration validation. The React frontend uses Django by default and can be pointed elsewhere with `VITE_API_URL`.
+This directory contains the Django REST API for account, department, complaint, assignment, priority, audit, notification, and dashboard workflows. The React frontend uses Django by default and can be pointed elsewhere with `VITE_API_URL`. The former Express implementation was removed from the working tree after API and permission verification; its source remains available in Git history.
 
 ## Requirements
 
 - Python 3.10 or newer
-- PostgreSQL for a PostgreSQL-backed environment (credentials are not included)
+- PostgreSQL for PostgreSQL-backed development and deployment (credentials are not included)
+- SQLite is used for isolated local checks when `DATABASE_URL` is unset
 
 ## Local setup
 
 From this directory, create and activate a virtual environment, install dependencies, and copy the example environment file:
 
-```bash
-python -m venv .venv
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-# macOS/Linux: source .venv/bin/activate
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-# macOS/Linux: cp .env.example .env
-python manage.py migrate
 ```
 
-Replace the example `DJANGO_SECRET_KEY` with a private random value before running Django with `DJANGO_DEBUG=false`; Django refuses to start in that mode with the placeholder or a missing key. `manage.py test` and `DJANGO_DEBUG=true` may use a development-only key. Without `DATABASE_URL`, Django uses a local SQLite database, so development does not require PostgreSQL credentials. To use PostgreSQL, set a connection URL such as:
+On macOS or Linux, use:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+For local development, keep `DJANGO_DEBUG=true` and configure `DATABASE_URL` for PostgreSQL. The sample database URL is commented out and contains placeholders; no database credentials are provided. Leave `DATABASE_URL` unset only for local SQLite checks. Before deploying, set `DJANGO_DEBUG=false`, a private random `DJANGO_SECRET_KEY` of at least 50 characters, production `DJANGO_ALLOWED_HOSTS`, and the production CORS origins. Django rejects missing, placeholder, and weak secrets outside local development and tests.
 
 ```dotenv
-DATABASE_URL=postgres://scms:password@localhost:5432/scms
+DATABASE_URL=postgres://DB_USER:DB_PASSWORD@localhost:5432/SCMS_DB
 ```
 
 The default CORS origins are the existing Vite development origins on port 5173. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list for another frontend origin.
@@ -37,7 +44,7 @@ python manage.py test
 python manage.py runserver 8000
 ```
 
-The default department migration adds Electrical, Plumbing, Civil, Networking, and Housekeeping if they do not already exist. It never deletes department rows. `migrate` applies Django migrations to the database selected by `DATABASE_URL`; use a backed-up development database when applying migrations to an existing environment.
+The default department migration adds Electrical, Plumbing, Civil, Networking, and Housekeeping if they do not already exist. It never deletes department rows. `migrate` applies Django migrations to the database selected by `DATABASE_URL`; back up an existing database before applying migrations.
 
 ## Django app responsibilities
 
@@ -117,4 +124,4 @@ Priority uses configurable transparent rule-based scores; it does not use machin
 
 ## MongoDB migration (separate, not run)
 
-No MongoDB credentials are required for local development, and no production database migration has been executed. The original Express backend and MongoDB remain available. See [`../../docs/MONGODB_TO_DJANGO_MIGRATION.md`](../../docs/MONGODB_TO_DJANGO_MIGRATION.md) for source schema inventory, export/import sequencing, reconciliation checks, rollback, and cutover gates. Run migrations only against an explicitly selected and backed-up Django database.
+No MongoDB credentials are required for local development, and no production database migration has been executed. Existing MongoDB data and backups are outside this cleanup and remain untouched. See [`../../docs/MONGODB_TO_DJANGO_MIGRATION.md`](../../docs/MONGODB_TO_DJANGO_MIGRATION.md) for the historical source schema inventory, export/import sequencing, reconciliation checks, rollback, and cutover gates. Run migrations only against an explicitly selected and backed-up Django database.

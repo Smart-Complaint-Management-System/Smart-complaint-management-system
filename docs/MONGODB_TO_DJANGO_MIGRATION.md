@@ -1,10 +1,10 @@
 # MongoDB to Django data migration plan
 
-This document records a controlled migration plan. It does not connect to MongoDB, import data, alter production records, or remove the Express backend. No production credentials are stored in this repository.
+This document records a controlled migration plan. It does not connect to MongoDB, import data, alter production records, or delete database backups. No production credentials are stored in this repository. The former Express code has since been removed from the working tree after Django API and permission verification; the last reviewed legacy source snapshot is available in Git history at commit `a7b53f8` (for example, `git show a7b53f8:backend/models/Complaint.js`).
 
 ## Source inventory
 
-The Mongoose schemas in `backend/models/` currently contain:
+The legacy Mongoose schemas recorded in the historical source snapshot contain:
 
 - `User`: Mongo `_id`, name, normalized email, bcrypt password hash, `user` or `admin` role, and Mongoose timestamps.
 - `Complaint`: Mongo `_id`, optional unique `complaintId`, `submittedBy` user reference, title, description, category, legacy status (`Submitted`, `In Progress`, `Resolved`, `Closed`), resolution, and timestamps.
@@ -37,9 +37,9 @@ The old system's `admin` role is organization-wide, so mapping to `SUPER_ADMIN` 
 4. Import to an empty, isolated staging PostgreSQL database through an idempotent import job using `legacy_mongo_id` keys and explicit user/complaint maps. Use a single transaction or restartable batches with a durable checkpoint; never clear destination tables automatically.
 5. Reconcile imported counts and foreign-key relationships. Verify complaint ID uniqueness, owner links, timestamps, status distributions, category mappings, audit links, and sampled records against Mongo. Compare aggregate counts and hashes for fields that can be canonicalized.
 6. Test representative accounts, user tracking, admin queues, login resets, and the complaint lifecycle against the staging import. Existing password hashes require a password reset unless a separately reviewed compatible password hasher is implemented and tested.
-7. Keep MongoDB read-only and Express available during verification. Capture a final delta export or schedule a brief write freeze, repeat reconciliation, and only then plan a reversible traffic cutover to Django.
-8. Monitor errors and counts after cutover. Retain the MongoDB backup and rollback path for the agreed recovery period. Do not delete MongoDB or Express until the owner signs off on verified behavior and retention requirements.
+7. Keep MongoDB read-only during verification. Capture a final delta export or schedule a brief write freeze, repeat reconciliation, and plan a reversible traffic cutover to Django. If a deployed Express service still exists outside this repository, retain its rollback route through this verification.
+8. Monitor errors and counts after cutover. Retain MongoDB backups and the agreed rollback path for the recovery period. Do not delete MongoDB data or backups until the owner signs off on verified behavior and retention requirements.
 
 ## Cutover gates
 
-Cutover requires verified source and destination counts, no unresolved ownership or audit orphans, acceptable sampled record comparisons, passing Django and frontend checks, tested account recovery, a rehearsed rollback, and explicit database-owner approval. This repository currently has not met those production-specific gates because no MongoDB credentials, dump, or PostgreSQL production configuration were provided. The Express backend remains intact.
+Cutover requires verified source and destination counts, no unresolved ownership or audit orphans, acceptable sampled record comparisons, passing Django and frontend checks, tested account recovery, a rehearsed rollback, and explicit database-owner approval. This repository has not met those production-specific gates because no MongoDB credentials, dump, or PostgreSQL production configuration were provided. This cleanup does not migrate or delete any MongoDB data or database backup.

@@ -1,202 +1,77 @@
-# Smart Complaint Management System (SCMS)
+# Smart Complaint Management System
 
-**Course:** Software Engineering (UE24CS341A) — PES University  
-**Group:** 8  
-**Sprint 1 Delivery:** Full 4-Member Core Functional & Testing Implementation  
-**Sprint 2 Documentation:** [Sprint 2 SICD Report](docs/Sprint-2-SICD.md)  
-**CI/CD Pipeline:** [SCMS CI/CD Documentation](docs/CI_CD_PIPELINE.md)
+SCMS provides complaint submission and tracking, department-scoped administration, employee assignment workflows, audit history, and notifications.
 
----
+## Architecture
 
-## 👥 Team Members & Primary Modules
+- **Frontend:** React 19, Vite, Tailwind CSS, and Axios in `frontend/`.
+- **Backend:** Django REST Framework in `backend/django/`.
+- **Database:** PostgreSQL for the target deployment. SQLite remains available for isolated local tests when `DATABASE_URL` is unset.
+- **Authentication:** JWT with role and department permissions enforced by Django.
 
-| Team Member | SRN | Primary Module | Requirements Covered |
-| :--- | :--- | :--- | :--- |
-| **Dhruva Ganesh Hegde** | `PES2UG24CS671` | **User Account & Complaint Submission** | `SCMS-F-001` to `SCMS-F-007`, `SCMS-SR-001`, `SCMS-SR-003`, `SCMS-NF-003`, `SCMS-NF-004`, `SCMS-NF-005` |
-| **Raksha** | `PES2UG24CS652` | **Complaint Tracking & User Status** | `SCMS-F-008` to `SCMS-F-011`, `SCMS-SR-004`, `SCMS-NF-001`, `SCMS-NF-003`, `SCMS-NF-005` |
-| **Keertana M** | `PES2UG24CS638` | **Admin Complaint Management & QA Lead** | `SCMS-F-012` to `SCMS-F-015`, `SCMS-SR-002`, `SCMS-NF-001`, `SCMS-NF-002`, `SCMS-NF-006` |
-| **ShivaSwaroop D S** | `PES2UG24CS679` | **Complaint Resolution & Closure** | `SCMS-F-016` to `SCMS-F-018`, `SCMS-SR-005`, `SCMS-NF-002`, `SCMS-NF-005`, `SCMS-NF-006` |
+The original Express/Mongoose backend has been removed from the working tree after Django API and permission verification. Existing MongoDB data is not imported or modified by this repository cleanup. The migration plan remains at [docs/MONGODB_TO_DJANGO_MIGRATION.md](docs/MONGODB_TO_DJANGO_MIGRATION.md).
 
----
+## Requirements
 
-## 🏗️ Architecture & Technology Stack
+- Python 3.10+
+- Node.js 22 LTS and npm
+- PostgreSQL for PostgreSQL-backed development or deployment
 
-- **Current backend:** Django REST Framework with PostgreSQL configuration and SQLite local development
-- **Legacy backend:** Express/Mongoose and MongoDB retained for rollback and migration validation
-- **Authentication & Security:** JWT, custom Django users, role-based access control, and department scoping
-- **Frontend:** React 19, Vite, Tailwind CSS (user, administrator, and employee workflows)
-- **Automated Testing:** Django test suite plus the existing Express test suite
-- **CI/CD:** GitHub Actions automated matrix testing, linting, production build gating, and packaging
+## Start locally
 
----
+### 1. Configure and run Django
 
-## 📋 Requirements & Test Case Coverage
-
-### 1. Dhruva Ganesh Hegde — User Account & Complaint Submission
-- **`SCMS-F-001` / `TC-REG-01`**: User registration with full name, email, password; input validation; duplicate email rejection (case-insensitive); password hash verification.
-- **`SCMS-F-002` / `TC-AUTH-01`**: User authentication (login) returning signed JWT token and user profile; credential security without detail leakage.
-- **`SCMS-F-003` / `TC-AUTH-02`**: User logout with client-side token clearance and endpoint response.
-- **`SCMS-F-004` / `TC-CMP-01`**: Authenticated complaint submission; user identity derived strictly from verified token (`req.user._id`).
-- **`SCMS-F-005` / `TC-CMP-02`**: Server-side unique complaint identifier generation (`CMP-...`).
-- **`SCMS-F-006` / `TC-CMP-03`**: Complaint detail persistence in MongoDB (title, description, category, status, timestamps).
-- **`SCMS-F-007` / `TC-CMP-04`**: Mandatory field validation before submission (missing/whitespace title, description, or category rejected).
-- **`SCMS-SR-001` / `TC-SEC-01`**: Protected route authentication enforcement.
-- **`SCMS-SR-003` / `TC-SEC-03`**: Password hashing via bcrypt; passwords never stored or returned in plaintext (`select: false`).
-- **`SCMS-NF-003` / `TC-NF-03`**: Clear validation feedback messages.
-
-### 2. Raksha — Complaint Tracking & User Status
-- **`SCMS-F-008` / `TC-TRK-01`**: User views complaints submitted through their account; empty list `[]` for accounts with no complaints.
-- **`SCMS-F-009` / `TC-TRK-02`**: User tracks live status read directly from database.
-- **`SCMS-F-010` / `TC-TRK-03`**: Clear complaint status and metadata display (title, description, category, timestamps, timeline).
-- **`SCMS-F-011` / `TC-TRK-04`**: User views updates and administrative responses.
-- **`SCMS-SR-004` / `TC-SEC-04`**: Strict cross-user data isolation (User A cannot view or access User B's complaint; returns 403 Forbidden).
-- **`SCMS-NF-001` / `TC-NF-01`**: Request response time within performance target (< 3 seconds).
-
-### 3. Keertana M — Admin Complaint Management & QA Lead
-- **`SCMS-F-012` / `TC-ADM-01`**: Administrator authentication; ordinary users denied admin access.
-- **`SCMS-F-013` / `TC-ADM-02`**: Admin views all submitted complaints across all users, with populated user names and emails.
-- **`SCMS-F-014` / `TC-ADM-03`**: Admin views details of any selected complaint; returns 404 for unknown IDs, 400 for malformed IDs.
-- **`SCMS-F-015` / `TC-ADM-04`**: Admin updates complaint status (`Submitted` $\rightarrow$ `In Progress`); invalid jumps or reopening closed complaints rejected.
-- **`SCMS-SR-002` / `TC-SEC-02`**: Server-side role checks on all admin routes; client role parameter cannot elevate privileges.
-- **`SCMS-NF-002` / `TC-NF-02`**: Health and system availability check endpoint (`/health`).
-- **`SCMS-NF-006` / `TC-NF-06`**: Modular maintainability and error isolation.
-
-### 4. ShivaSwaroop D S — Complaint Resolution & Closure
-- **`SCMS-F-016` / `TC-RES-01` (`TC-ADM-05`)**: Admin provides resolution/response text. String must be non-blank, max 2000 characters, trimmed before saving.
-- **`SCMS-F-017` / `TC-RES-02` (`TC-ADM-06`)**: Status changes follow sequence `Submitted` $\rightarrow$ `In Progress` $\rightarrow$ `Resolved` $\rightarrow$ `Closed`. A saved resolution is required before transitioning to `Resolved` or `Closed`. Closed complaints cannot be modified.
-- **`SCMS-F-018` / `TC-RES-03` (`TC-ADM-07`)**: Concerned user views final resolution and `Closed` status.
-- **`SCMS-SR-005` / `TC-SEC-05`**: Admin action recording: status transitions and resolutions create immutable `AuditLog` records.
-- **`SCMS-NF-005` / `TC-NF-05`**: Reliability and persistence: saved records remain consistent across refreshes and queries.
-
-### 5. Multi-Module Integration
-- **`SCMS-INT-001` / `AT-01` to `AT-05`**: Complete end-to-end multi-role lifecycle connecting user registration, complaint lodging, user tracking, admin triage, status advance, resolution recording, closure, audit trail, and user final visibility.
-
----
-
-## 🚀 Getting Started
-
-### Current Django + React setup
-
-Use two terminals. The backend uses SQLite by default; configure `DATABASE_URL` in `backend/django/.env` for PostgreSQL. Replace the example signing key with a private random value before starting Django with `DJANGO_DEBUG=false`.
+In PowerShell:
 
 ```powershell
 cd backend/django
-python -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-# Edit .env and set a private DJANGO_SECRET_KEY before continuing.
+```
+
+Edit `backend/django/.env`: set `DJANGO_DEBUG=true` for local development and configure `DATABASE_URL` for your local PostgreSQL database. The example uses placeholders, not real database credentials. To use SQLite for local checks, leave `DATABASE_URL` unset. Do not use the development setting or a placeholder secret in production.
+
+```powershell
 python manage.py migrate
 python manage.py check
 python manage.py createsuperuser
 python manage.py runserver 8000
 ```
 
+The API runs at `http://localhost:8000`; its health endpoint is `http://localhost:8000/api/health/`.
+
+### 2. Configure and run React
+
 In another terminal:
 
 ```powershell
 cd frontend
 npm ci
+Copy-Item .env.example .env.local
 npm run dev
 ```
 
-The frontend defaults to `http://localhost:8000`. Set `VITE_API_URL` in `frontend/.env.local` to override it. Django's default CORS origins allow Vite on port 5173. Start by creating a Super Admin with `createsuperuser`; create department administrators and employees through the authenticated organization management UI.
+Vite runs at `http://localhost:5173`. `VITE_API_URL` defaults to `http://localhost:8000`. Django's local CORS defaults include the Vite development origins; set `CORS_ALLOWED_ORIGINS` for any different browser origin.
 
-### Legacy Express setup (rollback and migration validation)
+## Verify locally
 
-These commands start the original Express service. They are retained for legacy verification and do not start the current React + Django application.
+```powershell
+# From backend/django
+python manage.py check
+python manage.py test
 
-```bash
-cd backend
-
-# Copy sample environment configuration
-cp .env.example .env
-
-# Install dependencies
-npm ci
-
-# Start development server
-npm run dev
-
-# Or start standard server
-npm start
-```
-
-### 2. Frontend Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-npm ci
-
-# Start Vite dev server
-npm run dev
-
-# Or build production bundle
+# From frontend
+npm run lint
 npm run build
 ```
 
-### 3. Create Admin Account (Optional Seeding)
+The Django backend guide documents authentication, departments, assignments, complaint APIs, permissions, and environment configuration: [backend/django/README.md](backend/django/README.md).
 
-```bash
-cd backend
-npm run seed:admin
-# Or using createAdmin script:
-node createAdmin.js
-```
+## Repository documents
 
----
-
-## 🧪 Legacy Express test suite
-
-The following commands exercise the original Express/MongoDB implementation. For the current Django application, run `python manage.py test` from `backend/django`; run `npm run lint` and `npm run build` from `frontend`.
-
-```bash
-cd backend
-
-# Run ALL tests across all modules, story suites, and end-to-end lifecycle
-npm test
-
-# Run tests by team member module:
-npm run test:dhruva        # User Account & Complaint Submission
-npm run test:raksha        # Complaint Tracking & User Status
-npm run test:keertana      # Admin Complaint Management
-npm run test:shivaswaroop  # Complaint Resolution & Closure
-npm run test:e2e           # End-to-end integration lifecycle
-```
-
----
-
-## 🔌 API Reference Summary
-
-### Authentication (`/api/auth`)
-- `POST /api/auth/register` — Register new user
-- `POST /api/auth/login` — Login user
-- `POST /api/auth/logout` — Logout user
-- `GET /api/auth/me` — Current authenticated user profile
-
-### Complaints (`/api/complaints`)
-- `POST /api/complaints` — Submit a complaint (requires Auth)
-- `GET /api/complaints` — List current user's complaints (requires Auth)
-- `GET /api/complaints/:id` — View complaint status & details (requires Auth & ownership)
-- `GET /api/complaints/:id/updates` — View updates and responses for a complaint (requires Auth & ownership)
-
-### Admin Management (`/api/admin`)
-- `POST /api/admin/login` — Administrator authentication
-- `GET /api/admin/complaints` — View all submitted complaints (requires Admin)
-- `GET /api/admin/complaints/:id` — View specific complaint details (requires Admin)
-- `PATCH /api/admin/complaints/:id/status` — Advance complaint status (`Submitted` $\rightarrow$ `In Progress` $\rightarrow$ `Resolved` $\rightarrow$ `Closed`)
-- `PATCH /api/admin/complaints/:id/resolution` — Enter resolution response (requires Admin)
-- `GET /api/admin/complaints/:id/audit-logs` — View complaint audit trail (requires Admin)
-
-### System Health
-- `GET /health` or `GET /api/health` — System and database health status
-
----
-
-## Django + React implementation
-
-The Django API now implements user roles, department routing, complaint lifecycle and history, rule-based priority, employee assignments, dashboards, audit events, and in-app notifications. React remains the frontend and defaults to `http://localhost:8000`; set `VITE_API_URL` to override it. The original Express/Mongoose backend is retained while data migration and cutover are validated.
-
-For current setup instructions, role-scoped APIs, test commands, and the non-destructive MongoDB migration plan, see [the Django backend guide](backend/django/README.md) and [the migration plan](docs/MONGODB_TO_DJANGO_MIGRATION.md).
+- [MongoDB to Django migration plan](docs/MONGODB_TO_DJANGO_MIGRATION.md) - preserved migration and reconciliation guidance; no production data migration is run automatically.
+- [CI pipeline](docs/CI_CD_PIPELINE.md) - current Django and React quality checks.
+- [Sprint 2 implementation record](docs/Sprint-2-SICD.md) - historical document from the original Express implementation.
+- The root PDF files contain the project requirements, architecture/design specification, and test plan.

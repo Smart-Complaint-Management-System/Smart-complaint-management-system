@@ -1,6 +1,8 @@
 # Smart Complaint Management System (SCMS)
 ## Sprint 2 — Software Implementation and Code Documentation (SICD)
 
+> Historical Sprint 2 record: this document describes the former Express/MongoDB implementation. The current architecture is React + Vite, Django REST Framework, and PostgreSQL; see the root README and `backend/django/README.md` for current instructions.
+
 **Project:** Smart Complaint Management System (SCMS)  
 **Academic Course:** Software Engineering (UE24CS341A) — PES University  
 **Project Group:** Group 8  
