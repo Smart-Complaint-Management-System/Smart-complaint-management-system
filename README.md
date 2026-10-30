@@ -163,3 +163,11 @@ npm run test:e2e           # End-to-end integration lifecycle
 
 ### System Health
 - `GET /health` or `GET /api/health` — System and database health status
+
+---
+
+## Django + React implementation
+
+The Django API now implements user roles, department routing, complaint lifecycle and history, rule-based priority, employee assignments, dashboards, audit events, and in-app notifications. React remains the frontend and defaults to `http://localhost:8000`; set `VITE_API_URL` to override it. The original Express/Mongoose backend is retained while data migration and cutover are validated.
+
+For current setup instructions, role-scoped APIs, test commands, and the non-destructive MongoDB migration plan, see [the Django backend guide](backend/django/README.md) and [the migration plan](docs/MONGODB_TO_DJANGO_MIGRATION.md).
