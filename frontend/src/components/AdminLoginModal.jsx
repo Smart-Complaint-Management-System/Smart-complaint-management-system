@@ -33,9 +33,9 @@ export default function AdminLoginModal({
       <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl relative">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold">Admin login</h2>
+            <h2 className="text-xl font-bold">Staff login</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Sign in to manage submitted complaints.
+              Sign in to access your administrator or employee workspace.
             </p>
           </div>
 

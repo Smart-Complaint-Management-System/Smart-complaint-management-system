@@ -1,14 +1,14 @@
-const STAGES = ["Submitted", "In Progress", "Resolved", "Closed"];
+const STAGES = ["Submitted", "Assigned", "Accepted", "In Progress", "Work Completed", "Resolved", "Closed"];
 
 export default function StatusTimeline({ currentStatus }) {
-  const currentIndex = STAGES.indexOf(currentStatus);
+  const effectiveIndex = STAGES.indexOf(currentStatus);
 
   return (
     <div className="py-4">
       <div className="flex items-center justify-between">
         {STAGES.map((stage, idx) => {
-          const isDone = currentIndex > idx;
-          const isCurrent = currentIndex === idx;
+          const isDone = effectiveIndex > idx;
+          const isCurrent = effectiveIndex === idx;
 
           return (
             <div key={stage} className="flex-1 text-center relative">
@@ -16,7 +16,7 @@ export default function StatusTimeline({ currentStatus }) {
               {idx > 0 && (
                 <div
                   className={`absolute top-4 -left-1/2 w-full h-1 -translate-y-1/2 z-0 ${
-                    currentIndex >= idx ? "bg-emerald-500" : "bg-slate-200"
+                    effectiveIndex >= idx ? "bg-emerald-500" : "bg-slate-200"
                   }`}
                 />
               )}

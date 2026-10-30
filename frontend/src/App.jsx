@@ -11,7 +11,14 @@ import SubmitComplaintForm from "./components/SubmitComplaintForm";
 import AuditTrailModal from "./components/AuditTrailModal";
 import LoginPrompt from "./components/LoginPrompt";
 import {
-  adminLogin as loginAdmin,
+  staffLogin,
+  getDashboardSummary,
+  getMyAssignments,
+  getAssignments,
+  assignComplaint,
+  getNotifications,
+  uploadAssignmentEvidence,
+  updateAssignment,
   loginUser,
   registerUser,
   logoutUser,
@@ -58,14 +65,21 @@ export default function App() {
 
   const [userComplaints, setUserComplaints] = useState([]);
   const [allComplaints, setAllComplaints] = useState([]);
+  const [dashboardData, setDashboardData] = useState(null);
+  const [myAssignments, setMyAssignments] = useState([]);
+  const [managerAssignments, setManagerAssignments] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [selectedEmployees, setSelectedEmployees] = useState({});
+  const [verificationDrafts, setVerificationDrafts] = useState({});
+  const [workNotes, setWorkNotes] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
   const [userAuthOpen, setUserAuthOpen] = useState(false);
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
-  const [adminEmail, setAdminEmail] = useState("admin@scms.pes.edu");
-  const [adminPassword, setAdminPassword] = useState("AdminPassword123!");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
 
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [resolutionDraft, setResolutionDraft] = useState("");
@@ -73,18 +87,100 @@ export default function App() {
   const [auditModalOpen, setAuditModalOpen] = useState(false);
 
   // Sync token with axios instance based on active role
+  // The effect intentionally follows auth identity changes; helper function identities change on render.
   useEffect(() => {
     sessionStorage.setItem("activeRole", activeRole);
-    if (activeRole === "admin" && adminToken) {
+    if ((activeRole === "admin" || activeRole === "employee") && adminToken) {
       setAuthToken(adminToken);
-      loadAdminComplaints(adminToken);
+      if (activeRole === "admin") loadAdminComplaints(adminToken);
+      loadStaffDashboard(adminToken);
     } else if (activeRole === "user" && userToken) {
       setAuthToken(userToken);
       loadUserComplaints(userToken);
+      loadNotifications(userToken);
     } else {
       setAuthToken(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRole, adminToken, userToken]);
+
+  async function loadStaffDashboard(token = adminToken, profile = adminData) {
+    if (!token) return;
+    setAuthToken(token);
+    try {
+      const [summary, assignments] = await Promise.all([
+        getDashboardSummary(),
+        (profile?.role === "EMPLOYEE" ? getMyAssignments() : getAssignments()).catch(() => ({ assignments: [] })),
+      ]);
+      setDashboardData(summary);
+      setMyAssignments(assignments.assignments || summary.assignments || []);
+      setManagerAssignments(assignments.assignments || []);
+      const notificationData = await getNotifications().catch(() => ({ notifications: [] }));
+      setNotifications(notificationData.notifications || []);
+    } catch (err) {
+      if (err.response?.status === 401) handleAdminLogout();
+    }
+  }
+
+  async function loadNotifications(token) {
+    if (token) setAuthToken(token);
+    try {
+      const result = await getNotifications();
+      setNotifications(result.notifications || []);
+    } catch {
+      setNotifications([]);
+    }
+  }
+
+  async function handleAssignmentAction(assignmentId, action, data = {}) {
+    setLoading(true);
+    setError("");
+    try {
+      setAuthToken(adminToken);
+      await updateAssignment(assignmentId, action, data);
+      await loadStaffDashboard(adminToken);
+      if (adminData?.role !== "EMPLOYEE") await loadAdminComplaints(adminToken);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Could not update assignment.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleEvidenceUpload(assignmentId, file) {
+    if (!file) return;
+    try {
+      setAuthToken(adminToken);
+      await uploadAssignmentEvidence(assignmentId, file);
+      await loadStaffDashboard(adminToken);
+      setSuccess("Work evidence uploaded.");
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Could not upload evidence.");
+    }
+  }
+
+  async function handleAssignComplaint(complaintId, complaintDepartmentId, workforce) {
+    const employeeId = selectedEmployees[complaintId];
+    if (!employeeId) return;
+    const target = workforce.find((employee) => String(employee.id) === String(employeeId));
+    let reason;
+    if (adminData?.role === "SUPER_ADMIN" && target?.department?.id && String(target.department.id) !== String(complaintDepartmentId)) {
+      reason = window.prompt("This moves the complaint to another department. Enter the override reason:");
+      if (!reason?.trim()) return;
+    }
+    setLoading(true);
+    try {
+      setAuthToken(adminToken);
+      await assignComplaint(complaintId, employeeId, reason);
+      await loadStaffDashboard(adminToken);
+      await loadAdminComplaints(adminToken);
+      setSuccess("Work assigned successfully.");
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Could not assign work.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function loadUserComplaints(token = userToken) {
     if (!token) return;
@@ -150,6 +246,7 @@ export default function App() {
     setUserToken("");
     setUserData(null);
     setUserComplaints([]);
+    setNotifications([]);
     setSelectedComplaint(null);
     setSuccess("Signed out successfully.");
     setTimeout(() => setSuccess(""), 3000);
@@ -162,17 +259,18 @@ export default function App() {
     setError("");
 
     try {
-      const data = await loginAdmin(adminEmail.trim(), adminPassword);
+      const data = await staffLogin(adminEmail.trim(), adminPassword);
       sessionStorage.setItem("adminToken", data.token);
-      sessionStorage.setItem("adminData", JSON.stringify(data.admin));
+      sessionStorage.setItem("adminData", JSON.stringify(data.user));
       setAdminToken(data.token);
-      setAdminData(data.admin);
+      setAdminData(data.user);
       setAdminLoginOpen(false);
-      setActiveRole("admin");
+      setActiveRole(data.user.role === "EMPLOYEE" ? "employee" : "admin");
       setActivePage("Dashboard");
       setSuccess("Administrator authentication successful.");
       setTimeout(() => setSuccess(""), 4000);
-      loadAdminComplaints(data.token);
+      if (data.user.role !== "EMPLOYEE") loadAdminComplaints(data.token);
+      loadStaffDashboard(data.token, data.user);
     } catch (err) {
       setError(
         err.response?.data?.message || err.message || "Invalid administrator credentials."
@@ -183,11 +281,16 @@ export default function App() {
   }
 
   function handleAdminLogout() {
+    if (adminToken) {
+      setAuthToken(adminToken);
+      logoutUser().catch(() => {});
+    }
     sessionStorage.removeItem("adminToken");
     sessionStorage.removeItem("adminData");
     setAdminToken("");
     setAdminData(null);
     setAllComplaints([]);
+    setNotifications([]);
     setSelectedComplaint(null);
     setSuccess("Administrator signed out.");
     setTimeout(() => setSuccess(""), 3000);
@@ -293,7 +396,7 @@ export default function App() {
   }
 
   // Compute stats
-  const activeList = activeRole === "admin" ? allComplaints : userComplaints;
+  const activeList = activeRole !== "user" ? allComplaints : userComplaints;
   const stats = {
     total: activeList.length,
     submitted: activeList.filter((c) => c.status === "Submitted").length,
@@ -307,7 +410,10 @@ export default function App() {
     { label: "Track Complaint", icon: "⌕", role: "user" },
     { label: "All Complaints", icon: "▤", role: "admin" },
     { label: "Resolution", icon: "✓", role: "admin" },
+    { label: "My Work", icon: "✓", role: "employee" },
   ];
+
+  menuItems.push({ label: "Work Management", icon: "⚒", role: "admin" });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -414,7 +520,7 @@ export default function App() {
         <div className="border-t border-slate-100 bg-slate-50/50">
           <div className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-4 sm:px-6">
             {menuItems
-              .filter((item) => !item.role || item.role === activeRole)
+              .filter((item) => !item.role || item.role === activeRole || (item.role === "admin" && activeRole === "employee"))
               .map((item) => (
                 <button
                   key={item.label}
@@ -461,11 +567,11 @@ export default function App() {
             <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">
-                  {activeRole === "admin" ? "Administrator Dashboard" : "User Dashboard"}
+                  {activeRole === "employee" ? "Employee Work Dashboard" : activeRole === "admin" ? "Department Dashboard" : "User Dashboard"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {activeRole === "admin"
-                    ? "Manage, triage, and resolve campus complaints across departments."
+                  {activeRole !== "user"
+                    ? activeRole === "employee" ? "Review assignments, record progress, and submit completed work for verification." : "Review department complaints, monitor workload, and verify completed work."
                     : "Welcome to SCMS. Submit new complaints or track existing issues easily."}
                 </p>
               </div>
@@ -503,7 +609,7 @@ export default function App() {
               </div>
             )}
 
-            {activeRole === "admin" && !adminToken && (
+            {activeRole !== "user" && !adminToken && (
               <div className="mb-8 rounded-2xl border border-amber-100 bg-amber-50/50 p-8 text-center shadow-xs">
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-2xl text-amber-700">
                   ⚙
@@ -522,6 +628,21 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            )}
+
+            {activeRole !== "user" && adminToken && dashboardData && (
+              <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
+                <h3 className="mb-4 font-bold text-slate-900">Live dashboard summary</h3>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {Object.entries(dashboardData.stats || {}).map(([label, value]) => (
+                    <div key={label} className="rounded-xl bg-slate-50 p-4">
+                      <p className="text-xs capitalize text-slate-500">{label.replaceAll("_", " ")}</p>
+                      <p className="mt-1 text-xl font-bold text-slate-900">{typeof value === "number" ? value : "—"}</p>
+                    </div>
+                  ))}
+                </div>
+                {activeRole === "admin" && dashboardData.organization_counts && <p className="mt-4 text-xs text-slate-500">Departments: {dashboardData.organization_counts.departments} · Administrators: {dashboardData.organization_counts.department_administrators} · Employees: {dashboardData.organization_counts.employees}</p>}
+              </section>
             )}
 
             {/* Metric Counters */}
@@ -544,6 +665,7 @@ export default function App() {
               ))}
             </div>
 
+            {activeRole !== "employee" && <>
             {/* Complaints List Section */}
             <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
               <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
@@ -581,6 +703,40 @@ export default function App() {
                   Please sign in to view your complaints list.
                 </p>
               )}
+            </div>
+            </>}
+            {notifications.length > 0 && <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs"><h3 className="font-bold text-slate-900">Recent notifications</h3><ul className="mt-3 divide-y divide-slate-100">{notifications.slice(0, 5).map((notice) => <li key={notice.id} className="py-3"><p className="text-sm font-semibold text-slate-800">{notice.title}</p><p className="mt-1 text-xs text-slate-500">{notice.message}</p><time className="mt-1 block text-[11px] text-slate-400">{new Date(notice.created_at || notice.createdAt).toLocaleString()}</time></li>)}</ul></section>}
+          </div>
+        )}
+
+        {activePage === "My Work" && activeRole === "employee" && (
+          <div>
+            <PageHeading title="My Assigned Work" description="Accept assignments, report progress, and submit completed work for administrator verification." />
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
+              {myAssignments.filter((item) => item.is_current).length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No current assignments. New work will appear here.</p> : <div className="divide-y divide-slate-100">{myAssignments.filter((item) => item.is_current).map((item) => <article key={item.id} className="flex flex-wrap items-center justify-between gap-4 p-5"><div><p className="font-semibold text-slate-900">{item.complaint_id} · {item.complaint_title}</p><p className="mt-1 text-xs text-slate-500">{item.department_name || "Unassigned"} · Priority {item.priority} ({item.priority_score}) · Due {item.due_at ? new Date(item.due_at).toLocaleString() : "not set"}</p><p className="mt-1 text-xs text-slate-500">Work status: {item.status.replaceAll("_", " ")}</p></div><div className="flex flex-wrap items-center gap-2"><input aria-label={`Work note for ${item.complaint_id}`} value={workNotes[item.id] || ""} onChange={(event) => setWorkNotes({ ...workNotes, [item.id]: event.target.value })} placeholder="Add a work note" className="w-44 rounded-lg border border-slate-200 px-3 py-2 text-xs" />{item.status === "ASSIGNED" && <button className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => handleAssignmentAction(item.id, "accept")}>Accept</button>}{["ACCEPTED", "IN_PROGRESS"].includes(item.status) && <button className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold" onClick={() => handleAssignmentAction(item.id, "progress", { note: workNotes[item.id] || "Work progress updated.", progress_percent: item.status === "ACCEPTED" ? 25 : 60 })}>Update progress</button>}{["ACCEPTED", "IN_PROGRESS"].includes(item.status) && <button className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => handleAssignmentAction(item.id, "complete", { note: workNotes[item.id] || "Work completed; ready for verification." })}>Mark complete</button>}<label className="cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Add evidence<input className="sr-only" type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={(event) => handleEvidenceUpload(item.id, event.target.files?.[0])} /></label></div></article>)}</div>}
+            </div>
+            <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs"><h3 className="font-bold text-slate-900">Work history</h3>{myAssignments.filter((item) => !item.is_current || ["COMPLETED", "VERIFIED", "REASSIGNED"].includes(item.status)).length === 0 ? <p className="mt-3 text-sm text-slate-500">Completed and reassigned work will appear here.</p> : <ul className="mt-3 divide-y divide-slate-100">{myAssignments.filter((item) => !item.is_current || ["COMPLETED", "VERIFIED", "REASSIGNED"].includes(item.status)).map((item) => <li key={`history-${item.id}`} className="py-3"><p className="text-sm font-semibold text-slate-800">{item.complaint_id} · {item.complaint_title}</p><p className="mt-1 text-xs text-slate-500">{item.status.replaceAll("_", " ")} · {item.department_name || "Department unavailable"}</p></li>)}</ul>}</section>
+          </div>
+        )}
+
+        {activePage === "Work Management" && activeRole === "admin" && (
+          <div>
+            <PageHeading title="Department Work Management" description="Assign scoped complaints to employees and monitor current work." />
+            <div className="space-y-3">
+              {allComplaints.filter((complaint) => !["Resolved", "Closed"].includes(complaint.status)).map((complaint) => {
+                const current = managerAssignments.find((assignment) => assignment.complaint_id === complaint.complaintId && assignment.is_current);
+                const rows = dashboardData?.employees || dashboardData?.employee_workload || [];
+                const employees = rows.map((row) => row.employee ? { ...row.employee, department: row.department } : null).filter(Boolean);
+                return <article key={complaint.id || complaint._id} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5">
+                  <div><p className="font-semibold text-slate-900">{complaint.complaintId} · {complaint.title}</p><p className="mt-1 text-xs text-slate-500">{complaint.assignedDepartment?.name || "Unassigned"} · {complaint.priority} · {complaint.status}</p><p className="mt-1 text-xs text-slate-600">{current ? `Assigned to ${current.employee?.name} (${current.status})` : "No employee assigned"}</p></div>
+                  <div className="flex gap-2">
+                    <select aria-label={`Employee for ${complaint.complaintId}`} value={selectedEmployees[complaint.complaintId] || ""} onChange={(event) => setSelectedEmployees({ ...selectedEmployees, [complaint.complaintId]: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"><option value="">Select employee</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}{adminData?.role === "SUPER_ADMIN" && employee.department?.name ? ` · ${employee.department.name}` : ""}</option>)}</select>
+                    <button type="button" disabled={loading || !selectedEmployees[complaint.complaintId]} onClick={() => handleAssignComplaint(complaint.complaintId, complaint.assignedDepartment?.id, employees)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{current ? "Reassign" : "Assign"}</button>
+                  </div>
+                </article>;
+              })}
+              {managerAssignments.filter((assignment) => assignment.is_current && assignment.status === "COMPLETED").map((assignment) => <article key={`verify-${assignment.id}`} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-5"><div><p className="font-semibold text-slate-900">Verify completed work · {assignment.complaint_id}</p><p className="mt-1 text-xs text-slate-600">{assignment.complaint_title} · {assignment.employee?.name}</p></div><div className="flex min-w-[280px] flex-1 gap-2"><input aria-label={`Resolution for ${assignment.complaint_id}`} value={verificationDrafts[assignment.id] || ""} onChange={(event) => setVerificationDrafts({ ...verificationDrafts, [assignment.id]: event.target.value })} placeholder="Verified resolution" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"/><button type="button" disabled={loading || !verificationDrafts[assignment.id]?.trim()} onClick={() => handleAssignmentAction(assignment.id, "verify", { resolution: verificationDrafts[assignment.id] })} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Verify and resolve</button></div></article>)}
+              {allComplaints.filter((complaint) => !["Resolved", "Closed"].includes(complaint.status)).length === 0 && managerAssignments.every((assignment) => assignment.status !== "COMPLETED") && <p className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">No open complaints in your scope.</p>}
             </div>
           </div>
         )}

@@ -29,6 +29,8 @@ export default function ComplaintTable({ complaints = [], onSelect }) {
             <th className="px-5 py-4 font-semibold">Category</th>
             <th className="px-5 py-4 font-semibold">Submitted by</th>
             <th className="px-5 py-4 font-semibold">Status</th>
+            <th className="px-5 py-4 font-semibold">Priority</th>
+            <th className="px-5 py-4 font-semibold">Department</th>
             <th className="px-5 py-4 font-semibold">Action</th>
           </tr>
         </thead>
@@ -59,6 +61,10 @@ export default function ComplaintTable({ complaints = [], onSelect }) {
               <td className="px-5 py-4">
                 <StatusBadge status={complaint.status} />
               </td>
+
+              <td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${complaint.priority === "CRITICAL" ? "bg-red-100 text-red-700" : complaint.priority === "HIGH" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600"}`}>{complaint.priority || "—"} · {complaint.priorityScore ?? 0}</span></td>
+
+              <td className="px-5 py-4 text-sm text-slate-600">{complaint.assignedDepartment?.name || "Review queue"}</td>
 
               <td className="px-5 py-4">
                 <button

@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5001",
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000",
   headers: {
     "Content-Type": "application/json",
   },
@@ -66,6 +66,50 @@ export async function adminLogin(email, password) {
     email,
     password,
   });
+  return response.data;
+}
+
+export async function staffLogin(email, password) {
+  const response = await api.post("/api/auth/login", { email, password });
+  return response.data;
+}
+
+export async function getDashboardSummary(params = {}) {
+  const response = await api.get("/api/dashboard/summary", { params });
+  return response.data;
+}
+
+export async function getMyAssignments() {
+  const response = await api.get("/api/assignments/me");
+  return response.data;
+}
+
+export async function getAssignments() {
+  const response = await api.get("/api/assignments");
+  return response.data;
+}
+
+export async function assignComplaint(complaintId, employeeId, reason) {
+  const response = await api.post("/api/assignments", { complaint_id: complaintId, employee_id: employeeId, ...(reason ? { reason } : {}) });
+  return response.data;
+}
+
+export async function updateAssignment(assignmentId, action, data = {}) {
+  const response = await api.post(`/api/assignments/${assignmentId}/${action}`, data);
+  return response.data;
+}
+
+export async function uploadAssignmentEvidence(assignmentId, file) {
+  const payload = new FormData();
+  payload.append("file", file);
+  const response = await api.post(`/api/assignments/${assignmentId}/evidence`, payload, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return response.data;
+}
+
+export async function getNotifications() {
+  const response = await api.get("/api/notifications");
   return response.data;
 }
 
