@@ -2,8 +2,10 @@
 
 from datetime import timedelta
 from pathlib import Path
+import sys
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -12,8 +14,21 @@ env = environ.Env(
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-development-key-change-me")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="").strip()
+if SECRET_KEY in {"replace-this-with-a-long-random-secret", "unsafe-development-key-change-me"}:
+    SECRET_KEY = ""
+if not SECRET_KEY:
+    if DEBUG or "test" in sys.argv:
+        SECRET_KEY = "unsafe-test-and-debug-only-key-do-not-deploy"
+    else:
+        raise ImproperlyConfigured(
+            "Set DJANGO_SECRET_KEY to a private random value before running with DJANGO_DEBUG=false."
+        )
+elif not DEBUG and "test" not in sys.argv and (len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5):
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be at least 50 characters with at least 5 unique characters."
+    )
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 INSTALLED_APPS = [
