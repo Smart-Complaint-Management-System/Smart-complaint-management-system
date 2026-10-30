@@ -1,5 +1,6 @@
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.functions import Lower
 from django.utils import timezone
@@ -64,3 +65,54 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+
+class DepartmentAdminProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="department_admin_profile",
+    )
+    department = models.ForeignKey(
+        "departments.Department",
+        on_delete=models.PROTECT,
+        related_name="admin_profiles",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        if self.user.role != UserRole.DEPARTMENT_ADMIN:
+            raise ValidationError("Department admin profiles require the DEPARTMENT_ADMIN role.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.email} — {self.department.name} admin"
+
+
+class EmployeeProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="employee_profile",
+    )
+    department = models.ForeignKey(
+        "departments.Department",
+        on_delete=models.PROTECT,
+        related_name="employee_profiles",
+    )
+    job_title = models.CharField(max_length=120, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        if self.user.role != UserRole.EMPLOYEE:
+            raise ValidationError("Employee profiles require the EMPLOYEE role.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.email} — {self.department.name}"
