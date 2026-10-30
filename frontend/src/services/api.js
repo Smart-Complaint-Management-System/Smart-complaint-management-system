@@ -113,6 +113,58 @@ export async function getNotifications() {
   return response.data;
 }
 
+export async function getDepartments() {
+  return (await api.get("/api/departments/")).data;
+}
+
+export async function getCategories() {
+  return (await api.get("/api/categories/")).data;
+}
+
+export async function createDepartment(data) {
+  return (await api.post("/api/departments/", data)).data;
+}
+
+export async function setDepartmentActive(id, isActive) {
+  return (await api.patch(`/api/departments/${id}/`, { is_active: isActive })).data;
+}
+
+export async function getManagedUsers() {
+  return (await api.get("/api/users/")).data;
+}
+
+export async function createManagedUser(data) {
+  return (await api.post("/api/users/", data)).data;
+}
+
+export async function setManagedUserActive(id, isActive) {
+  return (await api.patch(`/api/users/${id}/`, { is_active: isActive })).data;
+}
+
+export async function getEmployees() {
+  return (await api.get("/api/employees/")).data;
+}
+
+export async function createEmployee(data) {
+  return (await api.post("/api/employees/", data)).data;
+}
+
+export async function updateEmployee(id, data) {
+  return (await api.patch(`/api/employees/${id}/`, data)).data;
+}
+
+export async function deactivateEmployee(id) {
+  return (await api.delete(`/api/employees/${id}/`)).data;
+}
+
+export async function setEmployeeActive(id, isActive) {
+  return (await api.patch(`/api/employees/${id}/status/`, { is_active: isActive })).data;
+}
+
+export async function reassignComplaintDepartment(complaintId, departmentId, reason) {
+  return (await api.patch(`/api/admin/complaints/${complaintId}/department`, { department_id: departmentId, reason })).data;
+}
+
 export async function getAdminComplaints() {
   const response = await api.get("/api/admin/complaints");
   return response.data;

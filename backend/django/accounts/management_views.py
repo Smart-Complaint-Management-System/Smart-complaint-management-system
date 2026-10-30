@@ -118,6 +118,22 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         self.check_object_permissions(request, employee)
         return Response(EmployeeProfileSerializer(employee).data)
 
+    @action(detail=True, methods=["patch"], url_path="status")
+    def status(self, request, pk=None):
+        employee = self.get_object()
+        active = request.data.get("is_active")
+        if not isinstance(active, bool):
+            raise ValidationError({"is_active": "Provide a boolean value."})
+        previous = employee.user.is_active
+        employee.user.is_active = active
+        employee.user.save(update_fields=["is_active"])
+        if not active:
+            revoke_user_tokens(employee.user)
+        log_event(actor=request.user, action="EMPLOYEE_ACTIVATED" if active else "EMPLOYEE_DEACTIVATED",
+                  department=employee.department, previous_value={"is_active": previous},
+                  new_value={"is_active": active}, metadata={"employee_id": employee.user_id})
+        return Response(EmployeeProfileSerializer(employee).data)
+
     def perform_destroy(self, instance):
         instance.user.is_active = False
         instance.user.save(update_fields=["is_active"])

@@ -18,6 +18,17 @@ import {
   assignComplaint,
   getNotifications,
   uploadAssignmentEvidence,
+  getDepartments,
+  createDepartment,
+  setDepartmentActive,
+  getManagedUsers,
+  createManagedUser,
+  setManagedUserActive,
+  getEmployees,
+  createEmployee,
+  updateEmployee,
+  setEmployeeActive,
+  reassignComplaintDepartment,
   updateAssignment,
   loginUser,
   registerUser,
@@ -70,8 +81,15 @@ export default function App() {
   const [managerAssignments, setManagerAssignments] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [selectedEmployees, setSelectedEmployees] = useState({});
+  const [selectedDepartments, setSelectedDepartments] = useState({});
   const [verificationDrafts, setVerificationDrafts] = useState({});
   const [workNotes, setWorkNotes] = useState({});
+  const [departments, setDepartments] = useState([]);
+  const [managedUsers, setManagedUsers] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [departmentDraft, setDepartmentDraft] = useState({ name: "", identifier: "", description: "" });
+  const [employeeDraft, setEmployeeDraft] = useState({ name: "", email: "", password: "", job_title: "", department_id: "" });
+  const [managedUserDraft, setManagedUserDraft] = useState({ name: "", email: "", password: "", role: "DEPARTMENT_ADMIN", department_id: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -94,6 +112,7 @@ export default function App() {
       setAuthToken(adminToken);
       if (activeRole === "admin") loadAdminComplaints(adminToken);
       loadStaffDashboard(adminToken);
+      if (activeRole === "admin") loadOrganization(adminToken);
     } else if (activeRole === "user" && userToken) {
       setAuthToken(userToken);
       loadUserComplaints(userToken);
@@ -129,6 +148,107 @@ export default function App() {
       setNotifications(result.notifications || []);
     } catch {
       setNotifications([]);
+    }
+  }
+
+  async function loadOrganization(token = adminToken, profile = adminData) {
+    if (!token) return;
+    setAuthToken(token);
+    try {
+      const [departmentRows, userRows, employeeRows] = await Promise.all([
+        getDepartments(), getManagedUsers(), getEmployees(),
+      ]);
+      setDepartments(departmentRows);
+      setManagedUsers(userRows);
+      setEmployees(employeeRows);
+      if (profile?.department?.id) {
+        setEmployeeDraft((current) => ({ ...current, department_id: current.department_id || String(profile.department.id) }));
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not load organization data.");
+    }
+  }
+
+  async function handleCreateDepartment(event) {
+    event.preventDefault();
+    try {
+      setAuthToken(adminToken);
+      await createDepartment(departmentDraft);
+      setDepartmentDraft({ name: "", identifier: "", description: "" });
+      await loadOrganization(adminToken);
+      setSuccess("Department created.");
+    } catch (err) {
+      setError(err.response?.data?.detail || JSON.stringify(err.response?.data || {}) || "Could not create department.");
+    }
+  }
+
+  async function handleCreateEmployee(event) {
+    event.preventDefault();
+    try {
+      setAuthToken(adminToken);
+      await createEmployee({ ...employeeDraft, department_id: employeeDraft.department_id || undefined });
+      setEmployeeDraft({ ...employeeDraft, name: "", email: "", password: "", job_title: "" });
+      await loadOrganization(adminToken);
+      setSuccess("Employee account created.");
+    } catch (err) {
+      setError(err.response?.data?.detail || JSON.stringify(err.response?.data || {}) || "Could not create employee.");
+    }
+  }
+
+  async function handleCreateManagedUser(event) {
+    event.preventDefault();
+    try {
+      setAuthToken(adminToken);
+      await createManagedUser({ ...managedUserDraft, department_id: managedUserDraft.role === "DEPARTMENT_ADMIN" ? managedUserDraft.department_id || undefined : undefined });
+      setManagedUserDraft({ ...managedUserDraft, name: "", email: "", password: "" });
+      await loadOrganization(adminToken);
+      setSuccess("Account created.");
+    } catch (err) {
+      setError(err.response?.data?.detail || JSON.stringify(err.response?.data || {}) || "Could not create account.");
+    }
+  }
+
+  async function handleEmployeeUpdate(employee, data) {
+    try {
+      setAuthToken(adminToken);
+      await updateEmployee(employee.id, data);
+      await loadOrganization(adminToken);
+      setSuccess("Employee profile updated.");
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not update employee.");
+    }
+  }
+
+  async function handleDeactivateEmployee(employee) {
+    const nextActive = !employee.is_active;
+    if (!nextActive && !window.confirm(`Deactivate ${employee.name}'s account?`)) return;
+    try {
+      setAuthToken(adminToken);
+      await setEmployeeActive(employee.id, nextActive);
+      await loadOrganization(adminToken);
+      setSuccess("Employee account deactivated.");
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not deactivate employee.");
+    }
+  }
+
+  async function toggleDepartment(department) {
+    try {
+      setAuthToken(adminToken);
+      await setDepartmentActive(department.id, !department.is_active);
+      await loadOrganization(adminToken);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not update department.");
+    }
+  }
+
+  async function toggleManagedUser(user) {
+    try {
+      setAuthToken(adminToken);
+      await setManagedUserActive(user.id, !user.is_active);
+      await loadOrganization(adminToken);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not update account.");
     }
   }
 
@@ -179,6 +299,22 @@ export default function App() {
       setError(err.response?.data?.detail || err.message || "Could not assign work.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRouteComplaint(complaintId) {
+    const departmentId = selectedDepartments[complaintId];
+    if (!departmentId) return;
+    const reason = window.prompt("Enter why this complaint needs to be routed to the selected department:");
+    if (!reason?.trim()) return;
+    try {
+      setAuthToken(adminToken);
+      await reassignComplaintDepartment(complaintId, departmentId, reason);
+      await loadAdminComplaints(adminToken);
+      await loadStaffDashboard(adminToken);
+      setSuccess("Complaint routed to the selected department.");
+    } catch (err) {
+      setError(err.response?.data?.detail || "Could not route complaint.");
     }
   }
 
@@ -271,6 +407,7 @@ export default function App() {
       setTimeout(() => setSuccess(""), 4000);
       if (data.user.role !== "EMPLOYEE") loadAdminComplaints(data.token);
       loadStaffDashboard(data.token, data.user);
+      if (data.user.role !== "EMPLOYEE") loadOrganization(data.token, data.user);
     } catch (err) {
       setError(
         err.response?.data?.message || err.message || "Invalid administrator credentials."
@@ -414,6 +551,7 @@ export default function App() {
   ];
 
   menuItems.push({ label: "Work Management", icon: "⚒", role: "admin" });
+  menuItems.push({ label: "Team Management", icon: "♙", role: "admin" });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -641,7 +779,10 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                {activeRole === "admin" && dashboardData.organization_counts && <p className="mt-4 text-xs text-slate-500">Departments: {dashboardData.organization_counts.departments} · Administrators: {dashboardData.organization_counts.department_administrators} · Employees: {dashboardData.organization_counts.employees}</p>}
+                {activeRole === "admin" && dashboardData.organization_counts && <p className="mt-4 text-xs text-slate-500">Departments: {dashboardData.organization_counts.departments} · Administrators: {dashboardData.organization_counts.department_admins} · Employees: {dashboardData.organization_counts.employees}</p>}
+                {dashboardData.department_stats?.length > 0 && <div className="mt-5 overflow-x-auto"><h4 className="mb-2 text-sm font-semibold text-slate-800">Department complaint statistics</h4><table className="w-full text-left text-xs"><thead><tr className="text-slate-500"><th className="py-2">Department</th><th>Total</th><th>Pending</th><th>Critical</th><th>Resolved</th></tr></thead><tbody>{dashboardData.department_stats.map((row) => <tr key={row.department_id || "unassigned"} className="border-t border-slate-100"><td className="py-2">{row.department__name || "Unassigned review"}</td><td>{row.total}</td><td>{row.pending}</td><td>{row.critical}</td><td>{row.resolved}</td></tr>)}</tbody></table></div>}
+                {(dashboardData.employee_workload || dashboardData.employees || []).length > 0 && <div className="mt-5"><h4 className="mb-2 text-sm font-semibold text-slate-800">Employee workload</h4><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{(dashboardData.employee_workload || dashboardData.employees).map((row) => <div key={row.employee.id} className="rounded-xl border border-slate-100 p-3"><p className="text-sm font-semibold text-slate-800">{row.employee.name}</p><p className="text-xs text-slate-500">{row.department?.name} · {row.active_assignments ?? (row.assigned + row.accepted + row.in_progress + row.completed_awaiting_verification)} active · {row.overdue} overdue</p></div>)}</div></div>}
+                {dashboardData.recent_activities?.length > 0 && <div className="mt-5"><h4 className="mb-2 text-sm font-semibold text-slate-800">Recent activity</h4><ul className="divide-y divide-slate-100">{dashboardData.recent_activities.slice(0, 5).map((activity) => <li key={activity.id} className="py-2 text-xs text-slate-600">{activity.actor?.name || "System"} · {activity.action.replaceAll("_", " ")} · {activity.complaint?.complaint_id || activity.department?.name || "Account activity"}</li>)}</ul></div>}
               </section>
             )}
 
@@ -719,11 +860,36 @@ export default function App() {
           </div>
         )}
 
+        {activePage === "Team Management" && activeRole === "admin" && (
+          <div className="space-y-6">
+            <PageHeading title={adminData?.role === "SUPER_ADMIN" ? "Organization Management" : "Department Team"} description="Manage department staff and account assignments within your authorized scope." />
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
+              <h3 className="font-bold text-slate-900">Add an employee</h3>
+              <form onSubmit={handleCreateEmployee} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <input required placeholder="Full name" value={employeeDraft.name} onChange={(event) => setEmployeeDraft({ ...employeeDraft, name: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                <input required type="email" placeholder="Email" value={employeeDraft.email} onChange={(event) => setEmployeeDraft({ ...employeeDraft, email: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                <input required type="password" minLength={12} placeholder="Temporary password" value={employeeDraft.password} onChange={(event) => setEmployeeDraft({ ...employeeDraft, password: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                <input placeholder="Job title" value={employeeDraft.job_title} onChange={(event) => setEmployeeDraft({ ...employeeDraft, job_title: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                <select required={adminData?.role === "SUPER_ADMIN"} disabled={adminData?.role !== "SUPER_ADMIN"} value={employeeDraft.department_id} onChange={(event) => setEmployeeDraft({ ...employeeDraft, department_id: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"><option value="">Select department</option>{departments.filter((department) => department.is_active).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select>
+                <button type="submit" disabled={loading} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Create employee</button>
+              </form>
+            </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs"><h3 className="font-bold text-slate-900">Employees</h3>{employees.length === 0 ? <p className="mt-3 text-sm text-slate-500">No employees in this scope yet.</p> : <div className="mt-3 divide-y divide-slate-100">{employees.map((employee) => <article key={employee.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><p className="font-semibold text-slate-800">{employee.name} <span className="font-normal text-slate-500">· {employee.email}</span> {!employee.is_active && <span className="text-xs text-red-600">Inactive</span>}</p><p className="text-xs text-slate-500">{employee.department_name}</p></div><div className="flex gap-2"><input aria-label={`Job title for ${employee.name}`} value={employee.job_title || ""} onChange={(event) => setEmployees((rows) => rows.map((row) => row.id === employee.id ? { ...row, job_title: event.target.value } : row))} onBlur={(event) => handleEmployeeUpdate(employee, { job_title: event.target.value })} placeholder="Job title" className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><button type="button" onClick={() => handleDeactivateEmployee(employee)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold">{employee.is_active ? "Deactivate" : "Reactivate"}</button></div></article>)}</div>}</section>
+
+            {adminData?.role === "SUPER_ADMIN" && <>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs"><h3 className="font-bold text-slate-900">Add department</h3><form onSubmit={handleCreateDepartment} className="mt-4 grid gap-3 sm:grid-cols-3"><input required placeholder="Department name" value={departmentDraft.name} onChange={(event) => setDepartmentDraft({ ...departmentDraft, name: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><input required placeholder="Unique identifier" value={departmentDraft.identifier} onChange={(event) => setDepartmentDraft({ ...departmentDraft, identifier: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><input placeholder="Description" value={departmentDraft.description} onChange={(event) => setDepartmentDraft({ ...departmentDraft, description: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><button type="submit" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Create department</button></form><div className="mt-4 divide-y divide-slate-100">{departments.map((department) => <div key={department.id} className="flex items-center justify-between py-3"><div><p className="font-semibold text-slate-800">{department.name} <span className="text-xs font-normal text-slate-500">({department.identifier})</span></p><p className="text-xs text-slate-500">{department.description || "No description"}</p></div><button type="button" onClick={() => toggleDepartment(department)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold">{department.is_active ? "Deactivate" : "Activate"}</button></div>)}</div></section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs"><h3 className="font-bold text-slate-900">Create an administrator account</h3><form onSubmit={handleCreateManagedUser} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><input required placeholder="Full name" value={managedUserDraft.name} onChange={(event) => setManagedUserDraft({ ...managedUserDraft, name: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><input required type="email" placeholder="Email" value={managedUserDraft.email} onChange={(event) => setManagedUserDraft({ ...managedUserDraft, email: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><input required type="password" minLength={12} placeholder="Temporary password" value={managedUserDraft.password} onChange={(event) => setManagedUserDraft({ ...managedUserDraft, password: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"/><select value={managedUserDraft.role} onChange={(event) => setManagedUserDraft({ ...managedUserDraft, role: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"><option value="DEPARTMENT_ADMIN">Department Admin</option><option value="SUPER_ADMIN">Super Admin</option><option value="USER">Regular User</option></select>{managedUserDraft.role === "DEPARTMENT_ADMIN" && <select required value={managedUserDraft.department_id} onChange={(event) => setManagedUserDraft({ ...managedUserDraft, department_id: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"><option value="">Choose department</option>{departments.filter((department) => department.is_active).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select>}<button type="submit" className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white">Create account</button></form><div className="mt-4 divide-y divide-slate-100">{managedUsers.filter((user) => user.role !== "EMPLOYEE").map((user) => <div key={user.id} className="flex items-center justify-between py-3"><p className="text-sm font-semibold text-slate-800">{user.name} · {user.email} <span className="font-normal text-slate-500">· {user.role} · {user.department?.name || "Organization"}</span></p><button type="button" onClick={() => toggleManagedUser(user)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold">{user.is_active ? "Deactivate" : "Reactivate"}</button></div>)}</div></section>
+            </>}
+          </div>
+        )}
+
         {activePage === "Work Management" && activeRole === "admin" && (
           <div>
             <PageHeading title="Department Work Management" description="Assign scoped complaints to employees and monitor current work." />
             <div className="space-y-3">
-              {allComplaints.filter((complaint) => !["Resolved", "Closed"].includes(complaint.status)).map((complaint) => {
+              {allComplaints.filter((complaint) => !["Resolved", "Closed"].includes(complaint.status) && (complaint.assignedDepartment || adminData?.role !== "SUPER_ADMIN")).map((complaint) => {
                 const current = managerAssignments.find((assignment) => assignment.complaint_id === complaint.complaintId && assignment.is_current);
                 const rows = dashboardData?.employees || dashboardData?.employee_workload || [];
                 const employees = rows.map((row) => row.employee ? { ...row.employee, department: row.department } : null).filter(Boolean);
@@ -735,6 +901,7 @@ export default function App() {
                   </div>
                 </article>;
               })}
+              {adminData?.role === "SUPER_ADMIN" && allComplaints.filter((complaint) => !complaint.assignedDepartment && !["Resolved", "Closed"].includes(complaint.status)).map((complaint) => <article key={`route-${complaint._id}`} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50/60 p-5"><div><p className="font-semibold text-slate-900">Unassigned review · {complaint.complaintId} · {complaint.title}</p><p className="mt-1 text-xs text-slate-600">Choose an active department. Routing is recorded in the audit trail.</p></div><div className="flex gap-2"><select aria-label={`Department for ${complaint.complaintId}`} value={selectedDepartments[complaint.complaintId] || ""} onChange={(event) => setSelectedDepartments({ ...selectedDepartments, [complaint.complaintId]: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm"><option value="">Select department</option>{departments.filter((department) => department.is_active).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select><button type="button" disabled={!selectedDepartments[complaint.complaintId]} onClick={() => handleRouteComplaint(complaint.complaintId)} className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Route complaint</button></div></article>)}
               {managerAssignments.filter((assignment) => assignment.is_current && assignment.status === "COMPLETED").map((assignment) => <article key={`verify-${assignment.id}`} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-5"><div><p className="font-semibold text-slate-900">Verify completed work · {assignment.complaint_id}</p><p className="mt-1 text-xs text-slate-600">{assignment.complaint_title} · {assignment.employee?.name}</p></div><div className="flex min-w-[280px] flex-1 gap-2"><input aria-label={`Resolution for ${assignment.complaint_id}`} value={verificationDrafts[assignment.id] || ""} onChange={(event) => setVerificationDrafts({ ...verificationDrafts, [assignment.id]: event.target.value })} placeholder="Verified resolution" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"/><button type="button" disabled={loading || !verificationDrafts[assignment.id]?.trim()} onClick={() => handleAssignmentAction(assignment.id, "verify", { resolution: verificationDrafts[assignment.id] })} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Verify and resolve</button></div></article>)}
               {allComplaints.filter((complaint) => !["Resolved", "Closed"].includes(complaint.status)).length === 0 && managerAssignments.every((assignment) => assignment.status !== "COMPLETED") && <p className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">No open complaints in your scope.</p>}
             </div>

@@ -199,6 +199,38 @@ class AuthenticationAPITests(TestCase):
         self.assertTrue(user.check_password("New-Independent-Phrase#3847"))
 
 
+class EmployeeStatusAPITests(TestCase):
+    def test_department_admin_can_activate_or_deactivate_only_own_employee(self):
+        department = Department.objects.get(identifier="electrical")
+        other_department = Department.objects.get(identifier="plumbing")
+        manager = User.objects.create_user(
+            "employee-status-admin@example.com", name="Department Admin",
+            password="Independent-Test-Passphrase#7291", role=UserRole.DEPARTMENT_ADMIN,
+        )
+        DepartmentAdminProfile.objects.create(user=manager, department=department)
+        employee = User.objects.create_user(
+            "employee-status@example.com", name="Technician",
+            password="Independent-Test-Passphrase#7291", role=UserRole.EMPLOYEE,
+        )
+        profile = EmployeeProfile.objects.create(user=employee, department=department)
+        client = APIClient()
+        client.force_authenticate(manager)
+        response = client.patch(f"/api/employees/{profile.pk}/status/", {"is_active": False}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        employee.refresh_from_db()
+        self.assertFalse(employee.is_active)
+        self.assertFalse(response.data["is_active"])
+        self.assertEqual(client.patch(f"/api/employees/{profile.pk}/status/", {"is_active": True}, format="json").status_code, 200)
+
+        outsider = User.objects.create_user(
+            "other-status-admin@example.com", name="Other Department Admin",
+            password="Independent-Test-Passphrase#7291", role=UserRole.DEPARTMENT_ADMIN,
+        )
+        DepartmentAdminProfile.objects.create(user=outsider, department=other_department)
+        client.force_authenticate(outsider)
+        self.assertEqual(client.patch(f"/api/employees/{profile.pk}/status/", {"is_active": False}, format="json").status_code, 404)
+
+
 class RoleManagementSerializerTests(TestCase):
     def setUp(self):
         self.department, _ = Department.objects.get_or_create(

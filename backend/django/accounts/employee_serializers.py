@@ -15,10 +15,11 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email", read_only=True)
     department_id = serializers.IntegerField(source="department.id", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
 
     class Meta:
         model = EmployeeProfile
-        fields = ("id", "user_id", "name", "email", "department_id", "department_name", "job_title", "created_at")
+        fields = ("id", "user_id", "name", "email", "department_id", "department_name", "job_title", "is_active", "created_at")
         read_only_fields = fields
 
 
