@@ -530,6 +530,63 @@ class ManagementPermissionAPITests(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+        
+    def test_admin_login_accepts_super_admin(self):
+        User.objects.create_superuser(
+            "super-admin-login@example.com",
+            name="Super Admin",
+            password="A-Strong-Test-Passphrase-193!",
+        )
+
+        response = self.client.post(
+            "/api/admin/login",
+            {
+                "email": "super-admin-login@example.com",
+                "password": "A-Strong-Test-Passphrase-193!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["access"])
+        self.assertTrue(response.data["refresh"])
+        self.assertEqual(response.data["token"], response.data["access"])
+        self.assertEqual(response.data["user"]["role"], UserRole.SUPER_ADMIN)
+
+    def test_admin_login_accepts_department_admin(self):
+        department, _ = Department.objects.get_or_create(
+            identifier="admin-login-test",
+            defaults={"name": "Admin Login Test"},
+        )
+
+        administrator = User.objects.create_user(
+            "department-login@example.com",
+            name="Department Admin",
+            password="A-Strong-Test-Passphrase-193!",
+            role=UserRole.DEPARTMENT_ADMIN,
+        )
+
+        DepartmentAdminProfile.objects.create(
+            user=administrator,
+            department=department,
+        )
+
+        response = self.client.post(
+            "/api/admin/login",
+            {
+                "email": "department-login@example.com",
+                "password": "A-Strong-Test-Passphrase-193!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["access"])
+        self.assertTrue(response.data["refresh"])
+        self.assertEqual(response.data["token"], response.data["access"])
+        self.assertEqual(response.data["user"]["role"], UserRole.DEPARTMENT_ADMIN)
+
+
     def test_department_admin_jwt_keeps_department_scope(self):
         login = self.client.post(
             "/api/auth/login",
