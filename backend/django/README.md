@@ -1,10 +1,10 @@
 # Django backend foundation
 
-This directory contains the Django REST API for account, department, complaint, assignment, priority, audit, notification, and dashboard workflows. The React frontend uses Django by default and can be pointed elsewhere with `VITE_API_URL`. The former Express implementation was removed from the working tree after API and permission verification; its source remains available in Git history.
+This directory contains the Django REST API for account, department, complaint, assignment, priority, audit, notification, and dashboard workflows. The React frontend uses Django by default and can be pointed elsewhere with `VITE_API_URL`. The legacy Express/Mongoose service is retained at `backend/` and is not part of the Render deployment.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.10 or newer (Python 3.12 is used in CI and Render configuration)
 - PostgreSQL for PostgreSQL-backed development and deployment (credentials are not included)
 - SQLite is used for isolated local checks when `DATABASE_URL` is unset
 
@@ -34,7 +34,7 @@ For local development, keep `DJANGO_DEBUG=true` and configure `DATABASE_URL` for
 DATABASE_URL=postgres://DB_USER:DB_PASSWORD@localhost:5432/SCMS_DB
 ```
 
-The default CORS origins are the existing Vite development origins on port 5173. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list for another frontend origin.
+The default CORS origins are the existing Vite development origins on port 5173. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list for another frontend origin. CORS and CSRF origins must include the scheme and exact host, with no trailing slash.
 
 ## Run the API
 
@@ -45,6 +45,34 @@ python manage.py runserver 8000
 ```
 
 The default department migration adds Electrical, Plumbing, Civil, Networking, and Housekeeping if they do not already exist. It never deletes department rows. `migrate` applies Django migrations to the database selected by `DATABASE_URL`; back up an existing database before applying migrations.
+
+## Production configuration: Render
+
+The repository-root `render.yaml` describes a Render PostgreSQL database and Django web service. It sets `backend/django` as the service root, collects static files during the build, runs migrations in Render's pre-deploy command, and starts `config.wsgi:application` with Gunicorn. The web plan is paid because Render pre-deploy commands require a paid web service. `autoDeployTrigger: off` prevents a Git push from deploying automatically.
+
+Render is pinned to Python 3.12.10, matching the locally verified runtime. The regular `requirements.txt` is suitable for Windows and local development. Render installs `requirements-production.txt`, which adds Gunicorn for its Linux web service.
+
+Production settings fail startup if the secret is weak, the database is missing or not PostgreSQL, no allowed host or exact CORS origin is configured, or durable media storage is missing. Render supplies `RENDER_EXTERNAL_HOSTNAME`; Django adds that hostname to `ALLOWED_HOSTS`. For a custom API domain, add its bare hostname to `DJANGO_ALLOWED_HOSTS`.
+
+| Variable | Requirement |
+|---|---|
+| `DJANGO_SECRET_KEY` | Generate a private random value of at least 50 characters; set in Render only. |
+| `DJANGO_DEBUG` | `false` in production. |
+| `PYTHON_VERSION` | `3.12.10`, pinned in `render.yaml` for reproducible builds. |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated hostnames only; Render's hostname is appended automatically. |
+| `DATABASE_URL` | PostgreSQL URL; supplied by the Render Blueprint. SQLite is rejected in production. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated exact HTTPS frontend origins. |
+| `CSRF_TRUSTED_ORIGINS` | Comma-separated exact HTTPS origins. |
+| `DJANGO_SECURE_SSL_REDIRECT` | `true` behind Render's HTTPS proxy. |
+| `DJANGO_SECURE_HSTS_SECONDS` | `31536000`; HSTS subdomain and preload flags intentionally remain disabled. |
+| `AWS_STORAGE_BUCKET_NAME` | Required private bucket name for production complaint attachments. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Bucket-scoped credentials, set only in the Render environment. |
+| `AWS_S3_REGION_NAME` | Storage bucket's region. |
+| `AWS_S3_ENDPOINT_URL` | Optional endpoint for an S3-compatible provider such as R2. |
+
+WhiteNoise serves compressed, content-hashed Django static assets collected to `staticfiles/`. Uploaded files use local `MEDIA_ROOT` only in development. Production requires the private S3-compatible bucket; file URLs are signed for five minutes. The API currently limits each upload to 10 MB and accepts JPG/JPEG/PNG/PDF filename extensions. Do not mount uploads on Render's ephemeral filesystem or make the object bucket public.
+
+Do not run the Render pre-deploy migration against an existing production database until the target, backup, and migration plan have been reviewed. The Blueprint currently declares a new database resource; it does not import MongoDB records.
 
 ## Django app responsibilities
 
@@ -124,4 +152,4 @@ Priority uses configurable transparent rule-based scores; it does not use machin
 
 ## MongoDB migration (separate, not run)
 
-No MongoDB credentials are required for local development, and no production database migration has been executed. Existing MongoDB data and backups are outside this cleanup and remain untouched. See [`../../docs/MONGODB_TO_DJANGO_MIGRATION.md`](../../docs/MONGODB_TO_DJANGO_MIGRATION.md) for the historical source schema inventory, export/import sequencing, reconciliation checks, rollback, and cutover gates. Run migrations only against an explicitly selected and backed-up Django database.
+No MongoDB credentials are required for Django local development, and no production database migration has been executed. The legacy Express/MongoDB service remains at `backend/`; this Render configuration does not start it. Existing MongoDB data and backups remain untouched. See [`../../docs/MONGODB_TO_DJANGO_MIGRATION.md`](../../docs/MONGODB_TO_DJANGO_MIGRATION.md) for source schema inventory, export/import sequencing, reconciliation checks, rollback, and cutover gates. Run migrations only against an explicitly selected and backed-up Django database.

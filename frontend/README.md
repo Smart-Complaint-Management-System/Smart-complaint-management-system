@@ -22,3 +22,9 @@ npm run build
 ```
 
 The package currently has no separate frontend test script. Backend endpoint and permission tests live in the Django applications; use `python manage.py test` from `backend/django/`.
+
+## Vercel deployment
+
+The project root is `frontend/`. Configure Vercel with `npm ci`, `npm run build`, and output directory `dist`. Set `VITE_API_URL` to the public HTTPS URL of the Django API in each Vercel environment. This value is public and compiled into the client bundle; do not place secrets in `VITE_*` variables. `vercel.json` rewrites SPA routes to `index.html`.
+
+The Django deployment must allow the exact Vercel origin in `CORS_ALLOWED_ORIGINS`. For separate preview origins, add exact origins to the API's environment or use a separate staging API.

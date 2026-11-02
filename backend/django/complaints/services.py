@@ -78,6 +78,11 @@ def create_complaint(*, actor, title, description, category):
         new_status=complaint.status,
         note="Complaint submitted.",
     )
+    if complaint.department_id:
+        from assignments.services import auto_assign_complaint
+
+        auto_assign_complaint(complaint=complaint)
+        complaint.refresh_from_db()
     log_event(
         actor=actor,
         action="COMPLAINT_CREATED",

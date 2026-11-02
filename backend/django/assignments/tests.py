@@ -26,6 +26,11 @@ class AssignmentWorkflowTests(TestCase):
             role=UserRole.DEPARTMENT_ADMIN,
         )
         DepartmentAdminProfile.objects.create(user=self.admin, department=self.electrical)
+        # Create the routed complaint before employee profiles so these tests
+        # can exercise the explicit manual-assignment workflow independently.
+        self.complaint = create_complaint(
+            actor=self.owner, title="Broken outlet", description="Socket not working", category="Electrical",
+        )
         self.worker = User.objects.create_user(
             "worker@example.com", name="Electrician", password=PASSWORD, role=UserRole.EMPLOYEE,
         )
@@ -34,9 +39,6 @@ class AssignmentWorkflowTests(TestCase):
             "plumber@example.com", name="Plumber", password=PASSWORD, role=UserRole.EMPLOYEE,
         )
         EmployeeProfile.objects.create(user=self.other_worker, department=self.plumbing, job_title="Plumber")
-        self.complaint = create_complaint(
-            actor=self.owner, title="Broken outlet", description="Socket not working", category="Electrical",
-        )
 
     def test_admin_cannot_assign_a_complaint_to_an_employee_in_another_department(self):
         with self.assertRaises(ValidationError):

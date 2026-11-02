@@ -1,12 +1,13 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from accounts.models import DepartmentAdminProfile, User
+from accounts.models import DepartmentAdminProfile, EmployeeProfile, User
 from accounts.roles import UserRole
 from audit.models import AuditEvent
 from complaints.models import CategoryDepartmentMapping, Complaint, ComplaintStatusHistory
 from complaints.priority import assess_priority
 from complaints.services import create_complaint, update_complaint
+from assignments.models import WorkAssignment
 from departments.models import Department
 
 
@@ -95,3 +96,97 @@ class ComplaintWorkflowTests(TestCase):
 
     def test_unauthenticated_complaint_access_is_rejected(self):
         self.assertEqual(APIClient().get("/api/complaints").status_code, 401)
+
+
+class AutomaticDepartmentAssignmentTests(TestCase):
+    def setUp(self):
+        self.department = Department.objects.create(identifier="auto-plumbing", name="Auto Plumbing")
+        self.other_department = Department.objects.create(identifier="auto-electrical", name="Auto Electrical")
+        CategoryDepartmentMapping.objects.create(category="Auto Plumbing Issue", department=self.department)
+        self.owner = User.objects.create_user("auto-owner@example.com", name="Resident", password=PASSWORD)
+
+    def employee(self, email, *, department=None, active=True, role=UserRole.EMPLOYEE):
+        user = User.objects.create_user(email, name=email.split("@")[0], password=PASSWORD, role=role)
+        user.is_active = active
+        user.save(update_fields=["is_active"])
+        if role == UserRole.EMPLOYEE:
+            EmployeeProfile.objects.create(user=user, department=department or self.department)
+        return user
+
+    def submit(self):
+        client = APIClient()
+        client.force_authenticate(self.owner)
+        return client.post(
+            "/api/complaints",
+            {"title": "Drinking water problem", "description": "No water at the tap", "category": "Auto Plumbing Issue"},
+            format="json",
+        )
+
+    def test_submission_assigns_department_employee_and_persists_assignment(self):
+        plumber = self.employee("auto-plumber@example.com")
+        response = self.submit()
+        self.assertEqual(response.status_code, 201, response.data)
+        complaint = Complaint.objects.get()
+        assignment = WorkAssignment.objects.get(complaint=complaint, is_current=True)
+        self.assertEqual(complaint.department, self.department)
+        self.assertEqual(complaint.assigned_employee, plumber)
+        self.assertEqual(assignment.employee, plumber)
+        self.assertEqual(assignment.assigned_by, self.owner)
+        self.assertEqual(complaint.status, Complaint.Status.ASSIGNED)
+        self.assertEqual(response.data["complaint"]["assignmentStatus"], "ASSIGNED")
+        self.assertTrue(AuditEvent.objects.filter(complaint=complaint, action="EMPLOYEE_AUTO_ASSIGNED").exists())
+
+        employee_client = APIClient()
+        employee_client.force_authenticate(plumber)
+        self.assertEqual(employee_client.get("/api/assignments/me").data["count"], 1)
+        admin_client = APIClient()
+        admin = User.objects.create_user("auto-admin@example.com", name="Admin", password=PASSWORD,
+                                         role=UserRole.DEPARTMENT_ADMIN)
+        DepartmentAdminProfile.objects.create(user=admin, department=self.department)
+        admin_client.force_authenticate(admin)
+        detail = admin_client.get(f"/api/admin/complaints/{complaint.pk}").data["complaint"]
+        self.assertEqual(detail["assignedEmployee"]["id"], plumber.pk)
+
+    def test_employee_from_another_department_is_never_selected(self):
+        wrong_department_employee = self.employee("wrong-department@example.com", department=self.other_department)
+        response = self.submit()
+        complaint = Complaint.objects.get()
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(complaint.assigned_employee)
+        self.assertFalse(WorkAssignment.objects.filter(complaint=complaint).exists())
+        self.assertEqual(response.data["complaint"]["assignmentStatus"], "NO_ELIGIBLE_EMPLOYEE")
+        self.assertNotEqual(complaint.assigned_employee, wrong_department_employee)
+
+    def test_inactive_employee_is_excluded(self):
+        inactive = self.employee("inactive-plumber@example.com", active=False)
+        response = self.submit()
+        complaint = Complaint.objects.get()
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(complaint.assigned_employee)
+        self.assertFalse(WorkAssignment.objects.filter(complaint=complaint, employee=inactive).exists())
+
+    def test_no_eligible_employee_is_reported_and_audited(self):
+        response = self.submit()
+        complaint = Complaint.objects.get()
+        self.assertIsNone(complaint.assigned_employee)
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+        self.assertEqual(response.data["complaint"]["assignmentMessage"],
+                         "No eligible employee is available in this department.")
+        event = AuditEvent.objects.get(complaint=complaint, action="EMPLOYEE_AUTO_ASSIGNMENT_UNAVAILABLE")
+        self.assertEqual(event.metadata["reason"], "no_eligible_employee")
+
+    def test_workload_ties_are_distributed_across_eligible_employees(self):
+        first = self.employee("first-plumber@example.com")
+        second = self.employee("second-plumber@example.com")
+        self.assertEqual(self.submit().status_code, 201)
+        self.assertEqual(self.submit().status_code, 201)
+        assigned_ids = set(WorkAssignment.objects.values_list("employee_id", flat=True))
+        self.assertEqual(assigned_ids, {first.pk, second.pk})
+
+    def test_regular_user_role_is_not_eligible(self):
+        regular_user = self.employee("regular-account@example.com", role=UserRole.USER)
+        response = self.submit()
+        complaint = Complaint.objects.get()
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(complaint.assigned_employee)
+        self.assertFalse(WorkAssignment.objects.filter(complaint=complaint, employee=regular_user).exists())

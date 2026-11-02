@@ -4,7 +4,7 @@ The repository has one GitHub Actions workflow at `.github/workflows/ci.yml`. It
 
 ## Django backend job
 
-The job uses Python 3.12, installs `backend/django/requirements.txt`, checks Django configuration, verifies that model changes have migrations, and runs the Django test suite. It uses Django's local test configuration and does not connect to a production database.
+The job uses Python 3.12, installs `backend/django/requirements-production.txt`, checks Django configuration and migration drift, runs `collectstatic`, validates the Gunicorn WSGI import, and runs the Django test suite. It uses Django's local test configuration and does not connect to a production database.
 
 ## React frontend job
 

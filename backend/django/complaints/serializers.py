@@ -54,6 +54,8 @@ class ComplaintReadSerializer(serializers.ModelSerializer):
     submittedBy = UserBriefSerializer(source="submitted_by", read_only=True)
     assignedDepartment = serializers.SerializerMethodField()
     assignedEmployee = UserBriefSerializer(source="assigned_employee", read_only=True)
+    assignmentStatus = serializers.SerializerMethodField()
+    assignmentMessage = serializers.SerializerMethodField()
     priorityScore = serializers.IntegerField(source="priority_score", read_only=True)
     priorityReason = serializers.JSONField(source="priority_reason", read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
@@ -68,7 +70,8 @@ class ComplaintReadSerializer(serializers.ModelSerializer):
         model = Complaint
         fields = (
             "id", "_id", "complaintId", "title", "description", "category", "submittedBy",
-            "assignedDepartment", "assignedEmployee", "priority", "priorityScore", "priorityReason",
+            "assignedDepartment", "assignedEmployee", "assignmentStatus", "assignmentMessage",
+            "priority", "priorityScore", "priorityReason",
             "priority_overridden", "status", "resolution", "dueDate", "resolvedAt", "closedAt",
             "createdAt", "updatedAt", "statusHistory", "attachments",
         )
@@ -78,6 +81,20 @@ class ComplaintReadSerializer(serializers.ModelSerializer):
         if department is None:
             return None
         return {"id": department.id, "identifier": department.identifier, "name": department.name}
+
+    def get_assignmentStatus(self, complaint):
+        if complaint.assigned_employee_id:
+            return "ASSIGNED"
+        if complaint.department_id:
+            return "NO_ELIGIBLE_EMPLOYEE"
+        return "NEEDS_DEPARTMENT_REVIEW"
+
+    def get_assignmentMessage(self, complaint):
+        if complaint.assigned_employee_id:
+            return "Assigned to an employee in the selected department."
+        if complaint.department_id:
+            return "No eligible employee is available in this department."
+        return "No active department is configured for this complaint category."
 
 
 class ComplaintCreateSerializer(serializers.Serializer):

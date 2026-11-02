@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -7,6 +8,7 @@ from accounts.roles import UserRole
 from audit.services import log_event
 from assignments.models import WorkAssignment, WorkUpdate
 from complaints.models import Complaint
+from departments.models import Department
 from complaints.services import actor_can_manage_complaint, transition_complaint
 from notifications.services import create_notification, notify_complaint_stakeholders
 
@@ -28,6 +30,106 @@ def _active_employee(employee, complaint):
     if profile.department_id != complaint.department_id:
         raise ValidationError({"employee_id": "Employees can receive work only from their own department."})
     return profile
+
+
+@transaction.atomic
+def auto_assign_complaint(*, complaint):
+    """Assign new routed work to the least-loaded active employee in its department."""
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+    if complaint.department_id is None or complaint.assigned_employee_id:
+        return None
+    if complaint.status in (Complaint.Status.RESOLVED, Complaint.Status.CLOSED):
+        return None
+
+    # Serialize selection per department so simultaneous submissions see each
+    # other's assignments and distribute ties predictably.
+    department = Department.objects.select_for_update().filter(
+        pk=complaint.department_id,
+        is_active=True,
+    ).first()
+    if department is None:
+        _log_auto_assignment_unavailable(complaint, "department_inactive")
+        return None
+
+    from assignments.models import WorkAssignment
+
+    active_statuses = (
+        WorkAssignment.Status.ASSIGNED,
+        WorkAssignment.Status.ACCEPTED,
+        WorkAssignment.Status.IN_PROGRESS,
+        WorkAssignment.Status.COMPLETED,
+    )
+    active_assignments = Q(
+        user__work_assignments__is_current=True,
+        user__work_assignments__status__in=active_statuses,
+    )
+    last_assignment = WorkAssignment.objects.filter(
+        employee_id=OuterRef("user_id"),
+        is_current=True,
+    ).order_by("-assigned_at").values("assigned_at")[:1]
+    profile = (
+        EmployeeProfile.objects.filter(
+            department=department,
+            user__role=UserRole.EMPLOYEE,
+            user__is_active=True,
+        )
+        .annotate(
+            active_workload=Count("user__work_assignments", filter=active_assignments),
+            last_assigned_at=Subquery(last_assignment),
+        )
+        .order_by("active_workload", F("last_assigned_at").asc(nulls_first=True), "user_id")
+        .select_related("user")
+        .first()
+    )
+    if profile is None:
+        _log_auto_assignment_unavailable(complaint, "no_eligible_employee")
+        return None
+
+    assignment = WorkAssignment.objects.create(
+        complaint=complaint,
+        employee=profile.user,
+        assigned_by=complaint.submitted_by,
+        due_at=complaint.due_at,
+    )
+    complaint.assigned_employee = profile.user
+    complaint.save(update_fields=["assigned_employee", "updated_at"])
+    if complaint.status == Complaint.Status.SUBMITTED:
+        transition_complaint(
+            complaint=complaint,
+            actor=None,
+            new_status=Complaint.Status.ASSIGNED,
+            note="Automatically assigned to an eligible employee in the selected department.",
+            metadata={"assignment_id": assignment.pk, "automatic": True},
+        )
+    log_event(
+        actor=None,
+        action="EMPLOYEE_AUTO_ASSIGNED",
+        complaint=complaint,
+        new_value={"employee_id": profile.user_id},
+        metadata={
+            "assignment_id": assignment.pk,
+            "department_id": department.pk,
+            "workload_at_assignment": profile.active_workload,
+        },
+    )
+    notify_complaint_stakeholders(
+        complaint=complaint,
+        actor=None,
+        kind="NEW_ASSIGNMENT",
+        title="Complaint work assigned",
+        message=f"{complaint.complaint_id} was assigned to {profile.user.name}.",
+    )
+    return assignment
+
+
+def _log_auto_assignment_unavailable(complaint, reason):
+    log_event(
+        actor=None,
+        action="EMPLOYEE_AUTO_ASSIGNMENT_UNAVAILABLE",
+        complaint=complaint,
+        new_value={"employee_id": None},
+        metadata={"department_id": complaint.department_id, "reason": reason},
+    )
 
 
 @transaction.atomic
