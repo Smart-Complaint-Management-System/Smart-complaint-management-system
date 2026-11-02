@@ -55,6 +55,112 @@ class ComplaintWorkflowTests(TestCase):
         client.force_authenticate(self.electrical_admin)
         self.assertEqual(client.get("/api/admin/complaints").data["count"], 1)
 
+        
+    def test_super_admin_can_view_complaints_across_departments(self):
+        create_complaint(
+            actor=self.user,
+            title="Electrical issue",
+            description="Damaged electrical socket",
+            category="Electrical",
+        )
+        create_complaint(
+            actor=self.user,
+            title="Plumbing issue",
+            description="Water leakage",
+            category="Plumbing",
+        )
+
+        super_admin = User.objects.create_superuser(
+            "super-admin-list@example.com",
+            name="Super Admin",
+            password=PASSWORD,
+        )
+
+        client = APIClient()
+        client.force_authenticate(super_admin)
+
+        response = client.get("/api/admin/complaints")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(len(response.data["complaints"]), 2)
+
+        for complaint in response.data["complaints"]:
+            self.assertNotIn("password", complaint)
+            self.assertNotIn("token", complaint)
+
+            if complaint.get("submittedBy"):
+                self.assertNotIn("password", complaint["submittedBy"])
+                self.assertNotIn("token", complaint["submittedBy"])
+
+    def test_regular_user_cannot_view_admin_complaint_list(self):
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        response = client.get("/api/admin/complaints")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_unauthenticated_user_cannot_view_admin_complaint_list(self):
+        client = APIClient()
+
+        response = client.get("/api/admin/complaints")
+
+        self.assertEqual(response.status_code, 401)
+        
+    def test_admin_can_view_selected_complaint_details(self):
+         complaint = create_complaint(
+            actor=self.user,
+            title="Broken electrical socket",
+            description="Socket is damaged in the classroom",
+            category="Electrical",
+        )
+
+         client = APIClient()
+         client.force_authenticate(self.electrical_admin)
+
+         response = client.get(f"/api/admin/complaints/{complaint.pk}")
+
+         self.assertEqual(response.status_code, 200, response.data)
+
+         complaint_data = response.data["complaint"]
+
+         self.assertEqual(complaint_data["title"], "Broken electrical socket")
+         self.assertEqual(
+            complaint_data["description"],
+            "Socket is damaged in the classroom",
+        )
+         self.assertNotIn("password", complaint_data)
+         self.assertNotIn("token", complaint_data)
+
+        
+   
+
+    def test_admin_complaint_details_returns_404_for_unknown_id(self):
+        client = APIClient()
+        client.force_authenticate(self.electrical_admin)
+
+        response = client.get("/api/admin/complaints/999999")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_regular_user_cannot_view_admin_complaint_details(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Broken light",
+            description="Light is not working",
+            category="Electrical",
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        response = client.get(f"/api/admin/complaints/{complaint.pk}")
+
+        self.assertEqual(response.status_code, 403)
+
+
+
     def test_priority_examples_are_transparent_and_ranked(self):
         exposed = assess_priority("Exposed electrical wire", "Live wire sparks near students", "Electrical")
         leak = assess_priority("Water leakage", "Water is leaking in a room", "Plumbing")
@@ -78,20 +184,97 @@ class ComplaintWorkflowTests(TestCase):
 
     def test_resolution_and_closure_require_resolution_and_record_history(self):
         complaint = create_complaint(
-            actor=self.user, title="Broken fixture", description="Fixture is broken", category="Electrical",
+            actor=self.user,
+            title="Broken fixture",
+            description="Fixture is broken",
+            category="Electrical",
         )
+
         client = APIClient()
         client.force_authenticate(self.electrical_admin)
+
         close_url = f"/api/admin/complaints/{complaint.pk}/status"
-        self.assertEqual(client.patch(close_url, {"status": Complaint.Status.CLOSED}, format="json").status_code, 400)
-        client.patch(f"/api/admin/complaints/{complaint.pk}/resolution", {"resolution": "Repaired"}, format="json")
-        self.assertEqual(client.patch(close_url, {"status": Complaint.Status.IN_PROGRESS}, format="json").status_code, 200)
-        self.assertEqual(client.patch(close_url, {"status": Complaint.Status.RESOLVED}, format="json").status_code, 200)
-        self.assertEqual(client.patch(close_url, {"status": Complaint.Status.CLOSED}, format="json").status_code, 200)
+
+        # Closing without a resolution must be rejected.
+        response = client.patch(
+            close_url,
+            {"status": Complaint.Status.CLOSED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        # Add resolution.
+        client.patch(
+            f"/api/admin/complaints/{complaint.pk}/resolution",
+            {"resolution": "Repaired"},
+            format="json",
+        )
+
+        # Perform valid status transitions.
+        for status in [
+            Complaint.Status.IN_PROGRESS,
+            Complaint.Status.RESOLVED,
+            Complaint.Status.CLOSED,
+        ]:
+            response = client.patch(
+                close_url,
+                {"status": status},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+
         complaint.refresh_from_db()
+
+        # Verify final status.
         self.assertEqual(complaint.status, Complaint.Status.CLOSED)
-        self.assertEqual(ComplaintStatusHistory.objects.filter(complaint=complaint).count(), 4)
-        self.assertTrue(AuditEvent.objects.filter(complaint=complaint, action="COMPLAINT_CLOSED").exists())
+
+        # Verify status history.
+        history = ComplaintStatusHistory.objects.filter(
+            complaint=complaint
+        ).order_by("created_at")
+
+        self.assertEqual(history.count(), 4)
+
+        final_history = history.last()
+        self.assertEqual(final_history.actor, self.electrical_admin)
+        self.assertEqual(
+            final_history.previous_status,
+            Complaint.Status.RESOLVED,
+        )
+        self.assertEqual(
+            final_history.new_status,
+            Complaint.Status.CLOSED,
+        )
+        self.assertIsNotNone(final_history.created_at)
+
+        # Verify audit event.
+        audit_event = AuditEvent.objects.filter(
+            complaint=complaint,
+            action="COMPLAINT_CLOSED",
+        ).first()
+
+        self.assertIsNotNone(audit_event)
+        self.assertEqual(audit_event.actor, self.electrical_admin)
+        self.assertEqual(
+            audit_event.previous_value["status"],
+            Complaint.Status.RESOLVED,
+        )
+        self.assertEqual(
+            audit_event.new_value["status"],
+            Complaint.Status.CLOSED,
+        )
+        self.assertIsNotNone(audit_event.created_at)
+
+        # Verify complaint owner can retrieve updated status.
+        client.force_authenticate(self.user)
+
+        response = client.get(f"/api/complaints/{complaint.pk}")
+
+        self.assertEqual(response.status_code, 200, response.data)
+
+        owner_complaint = response.data["complaint"]
+        self.assertEqual(owner_complaint["status"], Complaint.Status.CLOSED)
+        self.assertEqual(owner_complaint["resolution"], "Repaired")
 
     def test_unauthenticated_complaint_access_is_rejected(self):
         self.assertEqual(APIClient().get("/api/complaints").status_code, 401)
