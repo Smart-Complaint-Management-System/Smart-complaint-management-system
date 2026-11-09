@@ -6,7 +6,7 @@ from accounts.roles import UserRole
 from audit.models import AuditEvent
 from complaints.models import CategoryDepartmentMapping, Complaint, ComplaintStatusHistory
 from complaints.priority import assess_priority
-from complaints.services import create_complaint, update_complaint
+from complaints.services import create_complaint, transition_complaint, update_complaint
 from departments.models import Department
 
 
@@ -107,6 +107,198 @@ class ComplaintWorkflowTests(TestCase):
         response = client.get("/api/admin/complaints")
 
         self.assertEqual(response.status_code, 401)
+
+    def test_regular_user_lists_only_own_complaints_despite_query_parameters(self):
+        own_complaint = create_complaint(
+            actor=self.user,
+            title="My private complaint",
+            description="A complaint belonging to the signed-in user.",
+            category="Electrical",
+        )
+        other_user = User.objects.create_user(
+            "other-owner@example.com",
+            name="Other Owner",
+            password=PASSWORD,
+        )
+        other_complaint = create_complaint(
+            actor=other_user,
+            title="Other owner's confidential complaint",
+            description="This must not appear in another user's results.",
+            category="Electrical",
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        for endpoint in ("/api/complaints", "/api/user/complaints"):
+            response = client.get(
+                endpoint,
+                {
+                    "submitted_by": other_user.pk,
+                    "owner": other_user.pk,
+                    "search": other_complaint.complaint_id,
+                },
+            )
+
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(response.data["count"], 0)
+            self.assertNotIn(
+                other_complaint.complaint_id,
+                str(response.data),
+            )
+
+            response = client.get(
+                endpoint,
+                {"submitted_by": other_user.pk, "owner": other_user.pk},
+            )
+
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(
+                [item["complaintId"] for item in response.data["complaints"]],
+                [own_complaint.complaint_id],
+            )
+            self.assertNotIn(other_complaint.complaint_id, str(response.data))
+
+    def test_regular_user_cannot_fetch_another_users_complaint_or_updates_by_any_id(self):
+        other_user = User.objects.create_user(
+            "other-lookup-owner@example.com",
+            name="Other Lookup Owner",
+            password=PASSWORD,
+        )
+        other_complaint = create_complaint(
+            actor=other_user,
+            title="Private complaint for IDOR test",
+            description="Only its owner may retrieve this complaint.",
+            category="Electrical",
+        )
+        other_complaint.legacy_mongo_id = "legacy-private-complaint"
+        other_complaint.save(update_fields=["legacy_mongo_id"])
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+        lookups = (
+            str(other_complaint.pk),
+            other_complaint.complaint_id,
+            other_complaint.legacy_mongo_id,
+        )
+
+        for lookup in lookups:
+            for path in (
+                f"/api/complaints/{lookup}",
+                f"/api/user/complaints/{lookup}",
+                f"/api/complaints/{lookup}/updates",
+            ):
+                response = client.get(
+                    path,
+                    {"id": self.user.pk, "complaint_id": "my-complaint"},
+                )
+                self.assertEqual(response.status_code, 404, (path, response.data))
+                self.assertNotIn(other_complaint.complaint_id, str(response.data))
+
+    def test_complaint_owner_receives_persisted_status_history_and_updates(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Tracked complaint",
+            description="A complaint with status history and an update.",
+            category="Electrical",
+        )
+        complaint = transition_complaint(
+            complaint=complaint,
+            actor=self.electrical_admin,
+            new_status=Complaint.Status.IN_PROGRESS,
+            note="Work has started.",
+        )
+        history = complaint.status_history.get(new_status=Complaint.Status.IN_PROGRESS)
+        AuditEvent.objects.create(
+            actor=self.electrical_admin,
+            actor_role=UserRole.DEPARTMENT_ADMIN,
+            action="COMPLAINT_RESPONSE_ADDED",
+            complaint=complaint,
+            new_value={"resolution": "The repair is underway."},
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        detail_response = client.get(f"/api/complaints/{complaint.pk}")
+        updates_response = client.get(f"/api/complaints/{complaint.pk}/updates")
+
+        self.assertEqual(detail_response.status_code, 200, detail_response.data)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.IN_PROGRESS)
+        self.assertEqual(
+            detail_response.data["complaint"]["status"],
+            Complaint.Status.IN_PROGRESS,
+        )
+        self.assertEqual(
+            next(
+                item["id"]
+                for item in detail_response.data["complaint"]["statusHistory"]
+                if item["new_status"] == Complaint.Status.IN_PROGRESS
+            ),
+            history.pk,
+        )
+        transition_history = next(
+            item
+            for item in detail_response.data["complaint"]["statusHistory"]
+            if item["id"] == history.pk
+        )
+        self.assertEqual(transition_history["previous_status"], Complaint.Status.SUBMITTED)
+        self.assertEqual(transition_history["new_status"], Complaint.Status.IN_PROGRESS)
+        self.assertEqual(updates_response.status_code, 200, updates_response.data)
+        self.assertEqual(updates_response.data["currentStatus"], Complaint.Status.IN_PROGRESS)
+        self.assertTrue(
+            any(
+                event["details"].get("new", {}).get("resolution")
+                == "The repair is underway."
+                for event in updates_response.data["updates"]
+            ),
+            updates_response.data,
+        )
+
+    def test_regular_user_cannot_patch_another_users_complaint_but_can_edit_their_own(self):
+        other_user = User.objects.create_user(
+            "other-patch-owner@example.com",
+            name="Other Patch Owner",
+            password=PASSWORD,
+        )
+        other_complaint = create_complaint(
+            actor=other_user,
+            title="Other user's complaint",
+            description="Original private description.",
+            category="Electrical",
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.user)
+        response = client.patch(
+            f"/api/complaints/{other_complaint.pk}",
+            {"description": "Attempted unauthorized change."},
+            format="json",
+        )
+
+        self.assertIn(response.status_code, (403, 404), response.data)
+        other_complaint.refresh_from_db()
+        self.assertEqual(other_complaint.description, "Original private description.")
+        self.assertEqual(other_complaint.status, Complaint.Status.SUBMITTED)
+
+        own_complaint = create_complaint(
+            actor=self.user,
+            title="My editable complaint",
+            description="My original description.",
+            category="Electrical",
+        )
+        response = client.patch(
+            f"/api/complaints/{own_complaint.pk}",
+            {"description": "Updated by its owner."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        own_complaint.refresh_from_db()
+        self.assertEqual(own_complaint.description, "Updated by its owner.")
+        self.assertEqual(own_complaint.status, Complaint.Status.SUBMITTED)
+
         
     def test_admin_can_view_selected_complaint_details(self):
          complaint = create_complaint(

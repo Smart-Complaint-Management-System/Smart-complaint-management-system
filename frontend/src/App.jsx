@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import AdminLoginModal from "./components/AdminLoginModal";
 import UserAuthModal from "./components/UserAuthModal";
 import Detail from "./components/Detail";
@@ -36,6 +36,7 @@ import {
   submitComplaint,
   getUserComplaints,
   getUserComplaintById,
+  getComplaintUpdates,
   getAdminComplaints,
   getAdminComplaintById,
   saveComplaintResolution,
@@ -50,16 +51,35 @@ const NEXT_STATUS = {
   Resolved: "Closed",
 };
 
+function describeComplaintUpdate(update) {
+  const details = update.details || {};
+  const previous = details.previous || {};
+  const next = details.new || {};
+
+  if (details.note) return details.note;
+  if (details.reason) return `Reason: ${details.reason}`;
+  if (previous.status && next.status) {
+    return `Status changed from ${previous.status} to ${next.status}.`;
+  }
+  if (next.resolution) return next.resolution;
+  if (Object.keys(next).length > 0) {
+    return Object.entries(next)
+      .map(([field, value]) => `${field}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
+      .join("; ");
+  }
+  return "Complaint activity recorded.";
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [activeRole, setActiveRole] = useState(() => {
     return sessionStorage.getItem("activeRole") || "user";
   });
 
-  const [userToken, setUserToken] = useState(() => localStorage.getItem("userToken") || "");
+  const [userToken, setUserToken] = useState(() => sessionStorage.getItem("userToken") || "");
   const [userData, setUserData] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("userData") || "null");
+      return JSON.parse(sessionStorage.getItem("userData") || "null");
     } catch {
       return null;
     }
@@ -100,6 +120,11 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState("");
 
   const [selectedComplaint, setSelectedComplaint] = useState(null);
+  const [complaintUpdates, setComplaintUpdates] = useState([]);
+  const [complaintUpdatesError, setComplaintUpdatesError] = useState("");
+  const [selectedComplaintLoading, setSelectedComplaintLoading] = useState(false);
+  const selectionRequestId = useRef(0);
+  const componentMounted = useRef(true);
   const [resolutionDraft, setResolutionDraft] = useState("");
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
@@ -122,6 +147,36 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRole, adminToken, userToken]);
+
+  useEffect(() => {
+    // Older versions stored user credentials in origin-wide localStorage. Never
+    // restore them: they may belong to another tab's user.
+    localStorage.removeItem("userToken");
+    localStorage.removeItem("userData");
+  }, []);
+
+  useEffect(() => {
+    componentMounted.current = true;
+    return () => {
+      componentMounted.current = false;
+      selectionRequestId.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activePage !== "Complaint Details") {
+      selectionRequestId.current += 1;
+      setSelectedComplaintLoading(false);
+    }
+  }, [activePage]);
+
+  function invalidateComplaintSelection() {
+    selectionRequestId.current += 1;
+    setSelectedComplaintLoading(false);
+    setSelectedComplaint(null);
+    setComplaintUpdates([]);
+    setComplaintUpdatesError("");
+  }
 
   async function loadStaffDashboard(token = adminToken, profile = adminData) {
     if (!token) return;
@@ -353,8 +408,8 @@ export default function App() {
   // User Auth Handlers (Dhruva - SCMS-F-001, SCMS-F-002, SCMS-F-003)
   async function handleUserRegister(name, email, password) {
     const data = await registerUser(name, email, password);
-    localStorage.setItem("userToken", data.token);
-    localStorage.setItem("userData", JSON.stringify(data.user));
+    sessionStorage.setItem("userToken", data.token);
+    sessionStorage.setItem("userData", JSON.stringify(data.user));
     setUserToken(data.token);
     setUserData(data.user);
     setActiveRole("user");
@@ -365,8 +420,8 @@ export default function App() {
 
   async function handleUserLogin(email, password) {
     const data = await loginUser(email, password);
-    localStorage.setItem("userToken", data.token);
-    localStorage.setItem("userData", JSON.stringify(data.user));
+    sessionStorage.setItem("userToken", data.token);
+    sessionStorage.setItem("userData", JSON.stringify(data.user));
     setUserToken(data.token);
     setUserData(data.user);
     setActiveRole("user");
@@ -377,8 +432,8 @@ export default function App() {
 
   function handleUserLogout() {
     logoutUser().catch(() => {});
-    localStorage.removeItem("userToken");
-    localStorage.removeItem("userData");
+    sessionStorage.removeItem("userToken");
+    sessionStorage.removeItem("userData");
     setUserToken("");
     setUserData(null);
     setUserComplaints([]);
@@ -447,10 +502,16 @@ export default function App() {
 
   // Select Complaint Handler (Raksha & Keertana - SCMS-F-009, SCMS-F-014)
   async function handleSelectComplaint(c) {
+    const requestId = ++selectionRequestId.current;
+    const isCurrentRequest = () =>
+      componentMounted.current && selectionRequestId.current === requestId;
+
     setSelectedComplaint(null);
+    setComplaintUpdates([]);
+    setComplaintUpdatesError("");
     setResolutionDraft("");
     setActivePage("Complaint Details");
-    setLoading(true);
+    setSelectedComplaintLoading(true);
     setError("");
     setSuccess("");
 
@@ -459,20 +520,35 @@ export default function App() {
       if (activeRole === "admin") {
         setAuthToken(adminToken);
         const res = await getAdminComplaintById(c._id);
+        if (!isCurrentRequest()) return;
         details = res.complaint;
       } else {
         setAuthToken(userToken);
         const res = await getUserComplaintById(c._id);
+        if (!isCurrentRequest()) return;
         details = res.complaint;
+        try {
+          const updatesResponse = await getComplaintUpdates(c._id);
+          if (!isCurrentRequest()) return;
+          setComplaintUpdates(updatesResponse.updates || []);
+        } catch (updatesError) {
+          if (!isCurrentRequest()) return;
+          setComplaintUpdatesError(
+            updatesError.response?.data?.detail ||
+              updatesError.response?.data?.message ||
+              "Failed to load complaint updates."
+          );
+        }
       }
 
       setSelectedComplaint(details);
       setResolutionDraft(details.resolution || "");
     } catch (err) {
+      if (!isCurrentRequest()) return;
       setError(err.response?.data?.message || "Failed to load complaint details.");
       setActivePage(activeRole === "admin" ? "All Complaints" : "Track Complaint");
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setSelectedComplaintLoading(false);
     }
   }
 
@@ -1013,7 +1089,10 @@ export default function App() {
           <div>
             <button
               type="button"
-              onClick={() => setActivePage(activeRole === "admin" ? "All Complaints" : "Track Complaint")}
+              onClick={() => {
+                invalidateComplaintSelection();
+                setActivePage(activeRole === "admin" ? "All Complaints" : "Track Complaint");
+              }}
               className="mb-4 text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
             >
               ← Back to {activeRole === "admin" ? "all complaints" : "my complaints"}
@@ -1095,6 +1174,86 @@ export default function App() {
                       </p>
                     )}
                   </div>
+                )}
+
+                {activeRole === "user" && (
+                  <section
+                    aria-labelledby="complaint-status-history-heading"
+                    className="border-t border-slate-100 pt-5"
+                  >
+                    <h4
+                      id="complaint-status-history-heading"
+                      className="text-sm font-bold text-slate-800"
+                    >
+                      Status history
+                    </h4>
+                    {selectedComplaint.statusHistory?.length ? (
+                      <ol className="mt-3 space-y-3">
+                        {selectedComplaint.statusHistory.map((entry) => (
+                          <li
+                            key={entry.id}
+                            className="rounded-xl border border-slate-100 bg-slate-50 p-4"
+                          >
+                            <p className="text-sm font-semibold text-slate-800">
+                              {entry.previous_status
+                                ? `${entry.previous_status} → ${entry.new_status}`
+                                : entry.new_status}
+                            </p>
+                            {entry.note && (
+                              <p className="mt-1 text-sm text-slate-600">{entry.note}</p>
+                            )}
+                            <p className="mt-1 text-xs text-slate-500">
+                              {entry.createdAt
+                                ? new Date(entry.createdAt).toLocaleString()
+                                : "Date unavailable"}
+                              {entry.actor?.name ? ` · ${entry.actor.name}` : ""}
+                            </p>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-2 text-sm text-slate-500">
+                        No status history is available yet.
+                      </p>
+                    )}
+
+                    <h4 className="mt-6 text-sm font-bold text-slate-800">
+                      Complaint updates
+                    </h4>
+                    {complaintUpdatesError ? (
+                      <p role="alert" className="mt-2 text-sm text-red-700">
+                        {complaintUpdatesError}
+                      </p>
+                    ) : complaintUpdates.length > 0 ? (
+                      <ol className="mt-3 space-y-3">
+                        {complaintUpdates.map((update) => (
+                          <li
+                            key={update.id}
+                            className="rounded-xl border border-slate-100 bg-slate-50 p-4"
+                          >
+                            <p className="text-sm font-semibold text-slate-800">
+                              {update.action.replaceAll("_", " ")}
+                            </p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">
+                              {describeComplaintUpdate(update)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {update.createdAt
+                                ? new Date(update.createdAt).toLocaleString()
+                                : "Date unavailable"}
+                              {update.administrator?.name
+                                ? ` · ${update.administrator.name}`
+                                : ""}
+                            </p>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-2 text-sm text-slate-500">
+                        No additional updates are available yet.
+                      </p>
+                    )}
+                  </section>
                 )}
 
                 {/* Admin Management Section (Keertana & ShivaSwaroop) */}
@@ -1183,7 +1342,9 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <p className="text-sm text-slate-400 text-center py-10">Loading complaint details…</p>
+              <p className="text-sm text-slate-400 text-center py-10">
+                {selectedComplaintLoading ? "Loading complaint details…" : "No complaint selected."}
+              </p>
             )}
           </div>
         )}

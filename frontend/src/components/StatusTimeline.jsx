@@ -4,17 +4,22 @@ export default function StatusTimeline({ currentStatus }) {
   const effectiveIndex = STAGES.indexOf(currentStatus);
 
   return (
-    <div className="py-4">
-      <div className="flex items-center justify-between">
+    <nav aria-label="Complaint status progress" className="py-4">
+      <ol className="flex items-center justify-between">
         {STAGES.map((stage, idx) => {
           const isDone = effectiveIndex > idx;
           const isCurrent = effectiveIndex === idx;
 
           return (
-            <div key={stage} className="flex-1 text-center relative">
+            <li
+              key={stage}
+              aria-current={isCurrent ? "step" : undefined}
+              className="relative flex-1 text-center"
+            >
               {/* Connector line */}
               {idx > 0 && (
                 <div
+                  aria-hidden="true"
                   className={`absolute top-4 -left-1/2 w-full h-1 -translate-y-1/2 z-0 ${
                     effectiveIndex >= idx ? "bg-emerald-500" : "bg-slate-200"
                   }`}
@@ -24,6 +29,7 @@ export default function StatusTimeline({ currentStatus }) {
               {/* Circle */}
               <div className="relative z-10 flex flex-col items-center">
                 <div
+                  aria-hidden="true"
                   className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors ${
                     isCurrent
                       ? "bg-blue-600 text-white ring-4 ring-blue-100"
@@ -46,10 +52,10 @@ export default function StatusTimeline({ currentStatus }) {
                   {stage}
                 </span>
               </div>
-            </div>
+            </li>
           );
         })}
-      </div>
-    </div>
+      </ol>
+    </nav>
   );
 }
