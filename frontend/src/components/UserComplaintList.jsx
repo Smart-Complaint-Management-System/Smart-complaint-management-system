@@ -13,11 +13,12 @@ export default function UserComplaintList({ complaints = [], onSelect, onNewComp
     <div className="space-y-6">
       {/* Top Filter Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap gap-2">
+        <div role="group" aria-label="Filter complaints by status" className="flex flex-wrap gap-2">
           {["All", "Submitted", "In Progress", "Resolved", "Closed"].map((status) => (
             <button
               key={status}
               type="button"
+              aria-pressed={filter === status}
               onClick={() => setFilter(status)}
               className={`rounded-xl px-3.5 py-1.5 text-xs font-semibold transition-colors ${
                 filter === status
