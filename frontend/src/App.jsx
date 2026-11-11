@@ -47,6 +47,7 @@ import {
 } from "./services/api";
 import { establishPortalSession, restorePortalSession } from "./auth/portalAuth";
 import { getVisibleNavigationItems } from "./auth/portalNavigation";
+import { dashboardDataMatchesPortal, getDashboardAuthState, getEmployeeDashboardAssignments } from "./auth/dashboardState";
 
 const NEXT_STATUS = {
   Submitted: "In Progress",
@@ -94,6 +95,8 @@ export default function App() {
   const [userComplaints, setUserComplaints] = useState([]);
   const [allComplaints, setAllComplaints] = useState([]);
   const [dashboardData, setDashboardData] = useState(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState("");
   const [myAssignments, setMyAssignments] = useState([]);
   const [managerAssignments, setManagerAssignments] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -181,6 +184,8 @@ export default function App() {
 
   async function loadStaffDashboard(token = adminToken, profile = adminData) {
     if (!token) return;
+    setDashboardLoading(true);
+    setDashboardError("");
     setAuthToken(token);
     try {
       const [summary, assignments] = await Promise.all([
@@ -196,7 +201,11 @@ export default function App() {
       if (err.response?.status === 401) {
         if (profile?.role === "EMPLOYEE") handleEmployeeLogout();
         else handleAdminLogout();
+      } else {
+        setDashboardError(err.response?.data?.detail || "Could not load dashboard data.");
       }
+    } finally {
+      setDashboardLoading(false);
     }
   }
 
@@ -636,6 +645,12 @@ export default function App() {
     inProgress: activeList.filter((c) => c.status === "In Progress").length,
     resolved: activeList.filter((c) => c.status === "Resolved" || c.status === "Closed").length,
   };
+  const dashboardAuthState = getDashboardAuthState(activeRole, { userToken, adminToken, employeeToken });
+  const employeeDashboardMatches = dashboardDataMatchesPortal(dashboardData, "employee");
+  const dashboardMatchesPortal = dashboardDataMatchesPortal(dashboardData, activeRole);
+  const employeeDashboardAssignments = employeeDashboardMatches
+    ? getEmployeeDashboardAssignments(dashboardData, myAssignments)
+    : [];
 
   const menuItems = [
     { label: "Dashboard", icon: "▦" },
@@ -854,7 +869,7 @@ export default function App() {
               </div>
             )}
 
-            {activeRole !== "user" && !(activeRole === "employee" ? employeeToken : adminToken) && (
+            {dashboardAuthState === "adminLoginRequired" && (
               <div className="mb-8 rounded-2xl border border-amber-100 bg-amber-50/50 p-8 text-center shadow-xs">
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-2xl text-amber-700">
                   ⚙
@@ -875,9 +890,32 @@ export default function App() {
               </div>
             )}
 
-            {activeRole !== "user" && (activeRole === "employee" ? employeeToken : adminToken) && dashboardData && (
+            {dashboardAuthState === "employeeLoginRequired" && (
+              <div className="mb-8 rounded-2xl border border-amber-100 bg-amber-50/50 p-8 text-center shadow-xs">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-2xl text-amber-700">♙</div>
+                <h3 className="mt-3 text-lg font-bold text-slate-900">Employee Authentication Required</h3>
+                <p className="mt-1 text-sm text-slate-500 max-w-md mx-auto">Sign in with your employee account to view assigned work and update its progress.</p>
+                <div className="mt-5 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => { setLoginPortal("employee"); setAdminLoginOpen(true); }}
+                    className="rounded-xl bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-900 cursor-pointer"
+                  >
+                    Employee Sign In
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {dashboardAuthState === "authenticated" && activeRole === "employee" && !employeeDashboardMatches && (
+              <p role={dashboardError ? "alert" : undefined} className="mb-8 rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-600">
+                {dashboardLoading ? "Loading your employee dashboard…" : dashboardError || "Employee dashboard data is not available."}
+              </p>
+            )}
+
+            {dashboardAuthState === "authenticated" && activeRole !== "user" && dashboardMatchesPortal && (
               <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
-                <h3 className="mb-4 font-bold text-slate-900">Live dashboard summary</h3>
+                <h3 className="mb-4 font-bold text-slate-900">{activeRole === "employee" ? "My work summary" : "Live dashboard summary"}</h3>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {Object.entries(dashboardData.stats || {}).map(([label, value]) => (
                     <div key={label} className="rounded-xl bg-slate-50 p-4">
@@ -890,10 +928,12 @@ export default function App() {
                 {dashboardData.department_stats?.length > 0 && <div className="mt-5 overflow-x-auto"><h4 className="mb-2 text-sm font-semibold text-slate-800">Department complaint statistics</h4><table className="w-full text-left text-xs"><thead><tr className="text-slate-500"><th className="py-2">Department</th><th>Total</th><th>Pending</th><th>Critical</th><th>Resolved</th></tr></thead><tbody>{dashboardData.department_stats.map((row) => <tr key={row.department_id || "unassigned"} className="border-t border-slate-100"><td className="py-2">{row.department__name || "Unassigned review"}</td><td>{row.total}</td><td>{row.pending}</td><td>{row.critical}</td><td>{row.resolved}</td></tr>)}</tbody></table></div>}
                 {(dashboardData.employee_workload || dashboardData.employees || []).length > 0 && <div className="mt-5"><h4 className="mb-2 text-sm font-semibold text-slate-800">Employee workload</h4><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{(dashboardData.employee_workload || dashboardData.employees).map((row) => <div key={row.employee.id} className="rounded-xl border border-slate-100 p-3"><p className="text-sm font-semibold text-slate-800">{row.employee.name}</p><p className="text-xs text-slate-500">{row.department?.name} · {row.active_assignments ?? (row.assigned + row.accepted + row.in_progress + row.completed_awaiting_verification)} active · {row.overdue} overdue</p></div>)}</div></div>}
                 {dashboardData.recent_activities?.length > 0 && <div className="mt-5"><h4 className="mb-2 text-sm font-semibold text-slate-800">Recent activity</h4><ul className="divide-y divide-slate-100">{dashboardData.recent_activities.slice(0, 5).map((activity) => <li key={activity.id} className="py-2 text-xs text-slate-600">{activity.actor?.name || "System"} · {activity.action.replaceAll("_", " ")} · {activity.complaint?.complaint_id || activity.department?.name || "Account activity"}</li>)}</ul></div>}
+                {activeRole === "employee" && <div className="mt-5"><h4 className="mb-2 text-sm font-semibold text-slate-800">Current assignments</h4>{employeeDashboardAssignments.length === 0 ? <p className="text-sm text-slate-500">No current assignments. New work will appear here.</p> : <ul className="divide-y divide-slate-100">{employeeDashboardAssignments.map((assignment) => <li key={assignment.id} className="py-3"><p className="text-sm font-semibold text-slate-800">{assignment.complaint_id} · {assignment.complaint_title}</p><p className="mt-1 text-xs text-slate-500">{assignment.department_name || "Department unavailable"} · {assignment.priority} · {assignment.status.replaceAll("_", " ")}{assignment.due_at ? ` · Due ${new Date(assignment.due_at).toLocaleString()}` : ""}</p></li>)}</ul>}</div>}
               </section>
             )}
 
             {/* Metric Counters */}
+            {activeRole !== "employee" && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 { title: "Total Complaints", value: stats.total, icon: "▤", color: "bg-blue-50 text-blue-700" },
@@ -912,6 +952,7 @@ export default function App() {
                 </div>
               ))}
             </div>
+            )}
 
             {activeRole !== "employee" && <>
             {/* Complaints List Section */}
