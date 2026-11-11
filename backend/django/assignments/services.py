@@ -30,6 +30,14 @@ def _active_employee(employee, complaint):
     return profile
 
 
+def _lock_assignment_and_complaint(assignment_id):
+    complaint_id = WorkAssignment.objects.values_list("complaint_id", flat=True).get(pk=assignment_id)
+    complaint = Complaint.objects.select_for_update().get(pk=complaint_id)
+    assignment = WorkAssignment.objects.select_for_update().get(pk=assignment_id)
+    assignment.complaint = complaint
+    return assignment
+
+
 @transaction.atomic
 def assign_complaint(*, complaint, actor, employee, due_at=None, override_reason=""):
     complaint = Complaint.objects.select_for_update().select_related("department").get(pk=complaint.pk)
@@ -112,6 +120,7 @@ def assign_complaint(*, complaint, actor, employee, due_at=None, override_reason
 
 @transaction.atomic
 def reassign_complaint_department(*, complaint, actor, department, reason):
+    complaint = Complaint.objects.select_for_update().select_related("department").get(pk=complaint.pk)
     if actor.role != UserRole.SUPER_ADMIN:
         raise ValidationError("Only a Super Admin can reassign a complaint between departments.")
     if not department.is_active:
@@ -167,11 +176,13 @@ def reassign_complaint_department(*, complaint, actor, department, reason):
 
 @transaction.atomic
 def accept_assignment(*, assignment, actor):
-    assignment = WorkAssignment.objects.select_for_update().select_related("complaint", "employee").get(pk=assignment.pk)
+    assignment = _lock_assignment_and_complaint(assignment.pk)
     if assignment.employee_id != actor.pk or not assignment.is_current:
         raise ValidationError("This assignment is not available to your account.")
     if assignment.status != WorkAssignment.Status.ASSIGNED:
         raise ValidationError({"status": "Only new assignments can be accepted."})
+    if assignment.complaint.status != Complaint.Status.ASSIGNED:
+        raise ValidationError({"status": "The complaint must be assigned before work can be accepted."})
     assignment.status = WorkAssignment.Status.ACCEPTED
     assignment.accepted_at = timezone.now()
     assignment.save(update_fields=["status", "accepted_at"])
@@ -200,11 +211,18 @@ def accept_assignment(*, assignment, actor):
 
 @transaction.atomic
 def update_assignment_progress(*, assignment, actor, note, progress_percent=None):
-    assignment = WorkAssignment.objects.select_for_update().select_related("complaint", "employee").get(pk=assignment.pk)
+    assignment = _lock_assignment_and_complaint(assignment.pk)
     if assignment.employee_id != actor.pk or not assignment.is_current:
         raise ValidationError("This assignment is not available to your account.")
     if assignment.status not in (WorkAssignment.Status.ACCEPTED, WorkAssignment.Status.IN_PROGRESS):
         raise ValidationError({"status": "Accept the assignment before recording work progress."})
+    expected_complaint_status = (
+        Complaint.Status.ACCEPTED
+        if assignment.status == WorkAssignment.Status.ACCEPTED
+        else Complaint.Status.IN_PROGRESS
+    )
+    if assignment.complaint.status != expected_complaint_status:
+        raise ValidationError({"status": "The complaint and assignment workflow stages do not match."})
     if not note.strip() and progress_percent is None:
         raise ValidationError({"note": "Add a work note or progress percentage."})
     if assignment.status == WorkAssignment.Status.ACCEPTED:
@@ -236,11 +254,13 @@ def update_assignment_progress(*, assignment, actor, note, progress_percent=None
 
 @transaction.atomic
 def complete_assignment(*, assignment, actor, note=""):
-    assignment = WorkAssignment.objects.select_for_update().select_related("complaint", "employee").get(pk=assignment.pk)
+    assignment = _lock_assignment_and_complaint(assignment.pk)
     if assignment.employee_id != actor.pk or not assignment.is_current:
         raise ValidationError("This assignment is not available to your account.")
-    if assignment.status not in (WorkAssignment.Status.ACCEPTED, WorkAssignment.Status.IN_PROGRESS):
-        raise ValidationError({"status": "Only accepted or in-progress work can be marked complete."})
+    if assignment.status != WorkAssignment.Status.IN_PROGRESS:
+        raise ValidationError({"status": "Record work progress before marking the assignment complete."})
+    if assignment.complaint.status != Complaint.Status.IN_PROGRESS:
+        raise ValidationError({"status": "The complaint must be in progress before work can be completed."})
     assignment.status = WorkAssignment.Status.COMPLETED
     assignment.completed_at = timezone.now()
     assignment.save(update_fields=["status", "completed_at"])
@@ -275,7 +295,7 @@ def complete_assignment(*, assignment, actor, note=""):
 
 @transaction.atomic
 def verify_assignment(*, assignment, actor, resolution):
-    assignment = WorkAssignment.objects.select_for_update().select_related("complaint", "complaint__department").get(pk=assignment.pk)
+    assignment = _lock_assignment_and_complaint(assignment.pk)
     _require_manager(actor, assignment.complaint)
     if not assignment.is_current or assignment.status != WorkAssignment.Status.COMPLETED:
         raise ValidationError({"status": "Only current completed work can be verified."})
@@ -284,15 +304,15 @@ def verify_assignment(*, assignment, actor, resolution):
     from complaints.services import save_resolution
 
     save_resolution(complaint=assignment.complaint, actor=actor, resolution=resolution)
+    assignment.status = WorkAssignment.Status.VERIFIED
+    assignment.verified_at = timezone.now()
+    assignment.save(update_fields=["status", "verified_at"])
     transition_complaint(
         complaint=assignment.complaint,
         actor=actor,
         new_status=Complaint.Status.RESOLVED,
         note="Department administrator verified the completed work.",
     )
-    assignment.status = WorkAssignment.Status.VERIFIED
-    assignment.verified_at = timezone.now()
-    assignment.save(update_fields=["status", "verified_at"])
     log_event(
         actor=actor,
         action="WORK_VERIFIED",
@@ -303,22 +323,42 @@ def verify_assignment(*, assignment, actor, resolution):
 
 
 def create_work_evidence(*, assignment, actor, uploaded_file):
-    if assignment.employee_id != actor.pk or not assignment.is_current:
-        raise ValidationError("Evidence can be added only to your current assignment.")
     from assignments.models import WorkEvidence
 
-    evidence = WorkEvidence.objects.create(
-        assignment=assignment,
-        uploaded_by=actor,
-        file=uploaded_file,
-        original_name=uploaded_file.name[:255],
-        content_type=getattr(uploaded_file, "content_type", "") or "",
-        size_bytes=uploaded_file.size,
-    )
-    log_event(
-        actor=actor,
-        action="WORK_EVIDENCE_ADDED",
-        complaint=assignment.complaint,
-        metadata={"assignment_id": assignment.pk, "name": evidence.original_name},
-    )
+    stored_file_name = None
+    storage = None
+    try:
+        with transaction.atomic():
+            assignment = _lock_assignment_and_complaint(assignment.pk)
+            if assignment.employee_id != actor.pk or not assignment.is_current:
+                raise ValidationError("Evidence can be added only to your current assignment.")
+            evidence = WorkEvidence(
+                assignment=assignment,
+                uploaded_by=actor,
+                original_name=uploaded_file.name[:255],
+                content_type=getattr(uploaded_file, "content_type", "") or "",
+                size_bytes=uploaded_file.size,
+            )
+            evidence.file.save(uploaded_file.name, uploaded_file, save=False)
+            stored_file_name = evidence.file.name
+            storage = evidence.file.storage
+            evidence.save(force_insert=True)
+            log_event(
+                actor=actor,
+                action="WORK_EVIDENCE_ADDED",
+                complaint=assignment.complaint,
+                metadata={"assignment_id": assignment.pk, "name": evidence.original_name},
+            )
+    except Exception:
+        if stored_file_name and storage:
+            try:
+                storage.delete(stored_file_name)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "Unable to remove work evidence file after transaction rollback: %s",
+                    stored_file_name,
+                )
+        raise
     return evidence

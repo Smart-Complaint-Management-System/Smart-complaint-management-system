@@ -10,6 +10,7 @@ export default function AdminLoginModal({
   error,
   onLogin,
   onClose,
+  portal = "admin",
 }) {
   useEffect(() => {
     function handleKeyDown(e) {
@@ -33,9 +34,9 @@ export default function AdminLoginModal({
       <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl relative">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold">Staff login</h2>
+            <h2 className="text-xl font-bold">{portal === "employee" ? "Employee login" : "Administrator login"}</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Sign in to access your administrator or employee workspace.
+              {portal === "employee" ? "Sign in to access your employee workspace." : "Sign in to access the administrator workspace."}
             </p>
           </div>
 
@@ -60,7 +61,7 @@ export default function AdminLoginModal({
               autoComplete="username"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="admin@example.com"
+              placeholder={portal === "employee" ? "employee@example.com" : "admin@example.com"}
               className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
             />
           </div>

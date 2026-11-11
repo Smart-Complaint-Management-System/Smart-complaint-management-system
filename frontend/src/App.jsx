@@ -11,7 +11,8 @@ import SubmitComplaintForm from "./components/SubmitComplaintForm";
 import AuditTrailModal from "./components/AuditTrailModal";
 import LoginPrompt from "./components/LoginPrompt";
 import {
-  staffLogin,
+  adminLogin,
+  employeeLogin,
   getDashboardSummary,
   getMyAssignments,
   getAssignments,
@@ -44,6 +45,7 @@ import {
   getComplaintAuditLogs,
   setAuthToken,
 } from "./services/api";
+import { establishPortalSession, restorePortalSession } from "./auth/portalAuth";
 
 const NEXT_STATUS = {
   Submitted: "In Progress",
@@ -76,23 +78,17 @@ export default function App() {
     return sessionStorage.getItem("activeRole") || "user";
   });
 
-  const [userToken, setUserToken] = useState(() => sessionStorage.getItem("userToken") || "");
-  const [userData, setUserData] = useState(() => {
-    try {
-      return JSON.parse(sessionStorage.getItem("userData") || "null");
-    } catch {
-      return null;
-    }
-  });
-
-  const [adminToken, setAdminToken] = useState(() => sessionStorage.getItem("adminToken") || "");
-  const [adminData, setAdminData] = useState(() => {
-    try {
-      return JSON.parse(sessionStorage.getItem("adminData") || "null");
-    } catch {
-      return null;
-    }
-  });
+  const [initialSessions] = useState(() => ({
+    user: restorePortalSession("user", sessionStorage),
+    admin: restorePortalSession("admin", sessionStorage),
+    employee: restorePortalSession("employee", sessionStorage),
+  }));
+  const [userToken, setUserToken] = useState(() => initialSessions.user.token);
+  const [userData, setUserData] = useState(() => initialSessions.user.user);
+  const [adminToken, setAdminToken] = useState(() => initialSessions.admin.token);
+  const [adminData, setAdminData] = useState(() => initialSessions.admin.user);
+  const [employeeToken, setEmployeeToken] = useState(() => initialSessions.employee.token);
+  const [employeeData, setEmployeeData] = useState(() => initialSessions.employee.user);
 
   const [userComplaints, setUserComplaints] = useState([]);
   const [allComplaints, setAllComplaints] = useState([]);
@@ -116,6 +112,7 @@ export default function App() {
 
   const [userAuthOpen, setUserAuthOpen] = useState(false);
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
+  const [loginPortal, setLoginPortal] = useState("admin");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
 
@@ -133,11 +130,14 @@ export default function App() {
   // The effect intentionally follows auth identity changes; helper function identities change on render.
   useEffect(() => {
     sessionStorage.setItem("activeRole", activeRole);
-    if ((activeRole === "admin" || activeRole === "employee") && adminToken) {
+    if (activeRole === "admin" && adminToken) {
       setAuthToken(adminToken);
-      if (activeRole === "admin") loadAdminComplaints(adminToken);
-      loadStaffDashboard(adminToken);
-      if (activeRole === "admin") loadOrganization(adminToken);
+      loadAdminComplaints(adminToken);
+      loadStaffDashboard(adminToken, adminData);
+      loadOrganization(adminToken);
+    } else if (activeRole === "employee" && employeeToken) {
+      setAuthToken(employeeToken);
+      loadStaffDashboard(employeeToken, employeeData);
     } else if (activeRole === "user" && userToken) {
       setAuthToken(userToken);
       loadUserComplaints(userToken);
@@ -146,7 +146,7 @@ export default function App() {
       setAuthToken(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRole, adminToken, userToken]);
+  }, [activeRole, adminToken, employeeToken, userToken]);
 
   useEffect(() => {
     // Older versions stored user credentials in origin-wide localStorage. Never
@@ -192,7 +192,10 @@ export default function App() {
       const notificationData = await getNotifications().catch(() => ({ notifications: [] }));
       setNotifications(notificationData.notifications || []);
     } catch (err) {
-      if (err.response?.status === 401) handleAdminLogout();
+      if (err.response?.status === 401) {
+        if (profile?.role === "EMPLOYEE") handleEmployeeLogout();
+        else handleAdminLogout();
+      }
     }
   }
 
@@ -308,13 +311,15 @@ export default function App() {
   }
 
   async function handleAssignmentAction(assignmentId, action, data = {}) {
+    const staffToken = activeRole === "employee" ? employeeToken : adminToken;
+    const staffData = activeRole === "employee" ? employeeData : adminData;
     setLoading(true);
     setError("");
     try {
-      setAuthToken(adminToken);
+      setAuthToken(staffToken);
       await updateAssignment(assignmentId, action, data);
-      await loadStaffDashboard(adminToken);
-      if (adminData?.role !== "EMPLOYEE") await loadAdminComplaints(adminToken);
+      await loadStaffDashboard(staffToken, staffData);
+      if (activeRole === "admin") await loadAdminComplaints(staffToken);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || "Could not update assignment.");
     } finally {
@@ -324,10 +329,12 @@ export default function App() {
 
   async function handleEvidenceUpload(assignmentId, file) {
     if (!file) return;
+    const staffToken = activeRole === "employee" ? employeeToken : adminToken;
+    const staffData = activeRole === "employee" ? employeeData : adminData;
     try {
-      setAuthToken(adminToken);
+      setAuthToken(staffToken);
       await uploadAssignmentEvidence(assignmentId, file);
-      await loadStaffDashboard(adminToken);
+      await loadStaffDashboard(staffToken, staffData);
       setSuccess("Work evidence uploaded.");
     } catch (err) {
       setError(err.response?.data?.detail || err.message || "Could not upload evidence.");
@@ -408,30 +415,26 @@ export default function App() {
   // User Auth Handlers (Dhruva - SCMS-F-001, SCMS-F-002, SCMS-F-003)
   async function handleUserRegister(name, email, password) {
     const data = await registerUser(name, email, password);
-    sessionStorage.setItem("userToken", data.token);
-    sessionStorage.setItem("userData", JSON.stringify(data.user));
-    setUserToken(data.token);
-    setUserData(data.user);
-    setActiveRole("user");
+    const session = establishPortalSession(data, "user", sessionStorage, setActiveRole);
+    setUserToken(session.token);
+    setUserData(session.user);
     setSuccess("Account successfully registered and signed in!");
     setTimeout(() => setSuccess(""), 4000);
-    loadUserComplaints(data.token);
+    loadUserComplaints(session.token);
   }
 
   async function handleUserLogin(email, password) {
     const data = await loginUser(email, password);
-    sessionStorage.setItem("userToken", data.token);
-    sessionStorage.setItem("userData", JSON.stringify(data.user));
-    setUserToken(data.token);
-    setUserData(data.user);
-    setActiveRole("user");
-    setSuccess(`Welcome back, ${data.user.name}!`);
+    const session = establishPortalSession(data, "user", sessionStorage, setActiveRole);
+    setUserToken(session.token);
+    setUserData(session.user);
+    setSuccess(`Welcome back, ${session.user.name}!`);
     setTimeout(() => setSuccess(""), 4000);
-    loadUserComplaints(data.token);
+    loadUserComplaints(session.token);
   }
 
   function handleUserLogout() {
-    logoutUser().catch(() => {});
+    logoutUser(userToken).catch(() => {});
     sessionStorage.removeItem("userToken");
     sessionStorage.removeItem("userData");
     setUserToken("");
@@ -450,22 +453,29 @@ export default function App() {
     setError("");
 
     try {
-      const data = await staffLogin(adminEmail.trim(), adminPassword);
-      sessionStorage.setItem("adminToken", data.token);
-      sessionStorage.setItem("adminData", JSON.stringify(data.user));
-      setAdminToken(data.token);
-      setAdminData(data.user);
+      const data = loginPortal === "employee"
+        ? await employeeLogin(adminEmail.trim(), adminPassword)
+        : await adminLogin(adminEmail.trim(), adminPassword);
+      const session = establishPortalSession(data, loginPortal, sessionStorage, setActiveRole);
+      if (loginPortal === "employee") {
+        setEmployeeToken(session.token);
+        setEmployeeData(session.user);
+      } else {
+        setAdminToken(session.token);
+        setAdminData(session.user);
+      }
       setAdminLoginOpen(false);
-      setActiveRole(data.user.role === "EMPLOYEE" ? "employee" : "admin");
       setActivePage("Dashboard");
-      setSuccess("Administrator authentication successful.");
+      setSuccess(loginPortal === "employee" ? "Employee authentication successful." : "Administrator authentication successful.");
       setTimeout(() => setSuccess(""), 4000);
-      if (data.user.role !== "EMPLOYEE") loadAdminComplaints(data.token);
-      loadStaffDashboard(data.token, data.user);
-      if (data.user.role !== "EMPLOYEE") loadOrganization(data.token, data.user);
+      if (loginPortal === "admin") {
+        loadAdminComplaints(session.token);
+        loadOrganization(session.token, session.user);
+      }
+      loadStaffDashboard(session.token, session.user);
     } catch (err) {
       setError(
-        err.response?.data?.message || err.message || "Invalid administrator credentials."
+      err.response?.data?.detail || err.response?.data?.message || err.message || `Invalid ${loginPortal} credentials.`
       );
     } finally {
       setLoading(false);
@@ -473,10 +483,7 @@ export default function App() {
   }
 
   function handleAdminLogout() {
-    if (adminToken) {
-      setAuthToken(adminToken);
-      logoutUser().catch(() => {});
-    }
+    logoutUser(adminToken).catch(() => {});
     sessionStorage.removeItem("adminToken");
     sessionStorage.removeItem("adminData");
     setAdminToken("");
@@ -486,6 +493,18 @@ export default function App() {
     setSelectedComplaint(null);
     setSuccess("Administrator signed out.");
     setTimeout(() => setSuccess(""), 3000);
+  }
+
+  function handleEmployeeLogout() {
+    logoutUser(employeeToken).catch(() => {});
+    sessionStorage.removeItem("employeeToken");
+    sessionStorage.removeItem("employeeData");
+    setEmployeeToken("");
+    setEmployeeData(null);
+    setMyAssignments([]);
+    setDashboardData(null);
+    setNotifications([]);
+    setSuccess("Employee signed out.");
   }
 
   // Complaint Submission Handler (Dhruva - SCMS-F-004 to F-007)
@@ -666,6 +685,13 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => { setActiveRole("employee"); setActivePage("Dashboard"); invalidateComplaintSelection(); }}
+                className={`rounded-lg px-3 py-1.5 transition-all cursor-pointer ${activeRole === "employee" ? "bg-white text-blue-700 shadow-xs" : "text-slate-500 hover:text-slate-900"}`}
+              >
+                Employee Portal
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setActiveRole("admin");
                   setActivePage("Dashboard");
@@ -705,7 +731,12 @@ export default function App() {
                   Sign In / Register
                 </button>
               )
-            ) : adminToken ? (
+            ) : activeRole === "employee" ? (employeeToken ? (
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">Employee: {employeeData?.name || "Employee"}</span>
+                <button type="button" onClick={handleEmployeeLogout} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer">Employee Logout</button>
+              </div>
+            ) : <button type="button" onClick={() => { setLoginPortal("employee"); setAdminLoginOpen(true); }} className="rounded-lg bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-900 cursor-pointer">Employee Sign In</button>) : adminToken ? (
               <div className="flex items-center gap-2">
                 <span className="hidden sm:inline-block rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
                   ⚙ Admin: {adminData?.name || "Administrator"}
@@ -721,7 +752,7 @@ export default function App() {
             ) : (
               <button
                 type="button"
-                onClick={() => setAdminLoginOpen(true)}
+                onClick={() => { setLoginPortal("admin"); setAdminLoginOpen(true); }}
                 className="rounded-lg bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-900 cursor-pointer"
               >
                 Admin Sign In
@@ -823,7 +854,7 @@ export default function App() {
               </div>
             )}
 
-            {activeRole !== "user" && !adminToken && (
+            {activeRole !== "user" && !(activeRole === "employee" ? employeeToken : adminToken) && (
               <div className="mb-8 rounded-2xl border border-amber-100 bg-amber-50/50 p-8 text-center shadow-xs">
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-2xl text-amber-700">
                   ⚙
@@ -844,7 +875,7 @@ export default function App() {
               </div>
             )}
 
-            {activeRole !== "user" && adminToken && dashboardData && (
+            {activeRole !== "user" && (activeRole === "employee" ? employeeToken : adminToken) && dashboardData && (
               <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
                 <h3 className="mb-4 font-bold text-slate-900">Live dashboard summary</h3>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1367,6 +1398,7 @@ export default function App() {
           setPassword={setAdminPassword}
           loading={loading}
           error={error}
+          portal={loginPortal}
           onLogin={handleAdminLogin}
           onClose={() => {
             setAdminLoginOpen(false);

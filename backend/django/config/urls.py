@@ -7,6 +7,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from accounts.views import (
     AdminLoginView,
+    EmployeeLoginView,
     LoginView,
     LogoutView,
     PasswordChangeView,
@@ -63,6 +64,7 @@ urlpatterns = [
     path("api/auth/password", PasswordChangeView.as_view(), name="auth-password"),
     path("api/auth/token/refresh", TokenRefreshView.as_view(), name="token-refresh"),
     path("api/admin/login", AdminLoginView.as_view(), name="admin-login"),
+    path("api/employee/login", EmployeeLoginView.as_view(), name="employee-login"),
     path("api/complaints", ComplaintListCreateView.as_view(), name="complaints"),
     path("api/complaints/<str:lookup>/updates", ComplaintUpdatesView.as_view(), name="complaint-updates"),
     path("api/complaints/<str:lookup>/attachments", ComplaintAttachmentView.as_view(), name="complaint-attachments"),

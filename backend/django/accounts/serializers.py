@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate, get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from accounts.roles import UserRole, department_for_user
@@ -80,9 +81,12 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     username_field = User.USERNAME_FIELD
+    allowed_roles = None
 
     @classmethod
     def get_token(cls, user):
+        if cls.allowed_roles is not None and user.role not in cls.allowed_roles:
+            raise AuthenticationFailed("These credentials are not valid for this portal.")
         token = super().get_token(user)
         token["token_version"] = user.token_version
         return token
@@ -93,6 +97,18 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         data["token"] = data["access"]
         data["user"] = UserSummarySerializer(self.user).data
         return data
+
+
+class UserPortalTokenObtainPairSerializer(EmailTokenObtainPairSerializer):
+    allowed_roles = (UserRole.USER,)
+
+
+class AdminPortalTokenObtainPairSerializer(EmailTokenObtainPairSerializer):
+    allowed_roles = (UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_ADMIN)
+
+
+class EmployeePortalTokenObtainPairSerializer(EmailTokenObtainPairSerializer):
+    allowed_roles = (UserRole.EMPLOYEE,)
 
 
 class PasswordChangeSerializer(serializers.Serializer):

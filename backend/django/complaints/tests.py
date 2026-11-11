@@ -1,11 +1,18 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from accounts.models import DepartmentAdminProfile, User
+from accounts.models import DepartmentAdminProfile, EmployeeProfile, User
 from accounts.roles import UserRole
 from audit.models import AuditEvent
 from complaints.models import CategoryDepartmentMapping, Complaint, ComplaintStatusHistory
 from complaints.priority import assess_priority
+from assignments.models import WorkAssignment
+from assignments.services import (
+    accept_assignment,
+    assign_complaint,
+    complete_assignment,
+    update_assignment_progress,
+)
 from complaints.services import create_complaint, transition_complaint, update_complaint
 from departments.models import Department
 
@@ -23,6 +30,11 @@ class ComplaintWorkflowTests(TestCase):
             role=UserRole.DEPARTMENT_ADMIN,
         )
         DepartmentAdminProfile.objects.create(user=self.electrical_admin, department=self.electrical)
+        self.worker = User.objects.create_user(
+            "electrical-worker@example.com", name="Electrical Worker", password=PASSWORD,
+            role=UserRole.EMPLOYEE,
+        )
+        EmployeeProfile.objects.create(user=self.worker, department=self.electrical, job_title="Technician")
         self.plumbing_admin = User.objects.create_user(
             "plumbing-admin@example.com", name="Plumbing Admin", password=PASSWORD,
             role=UserRole.DEPARTMENT_ADMIN,
@@ -97,6 +109,27 @@ class ComplaintWorkflowTests(TestCase):
         response = client.get("/api/admin/complaints")
 
         self.assertEqual(response.status_code, 403)
+
+    def test_staff_roles_cannot_use_regular_user_complaint_reads(self):
+        complaint = create_complaint(
+            actor=self.user, title="Private read boundary", description="Owner-only complaint.", category="Electrical",
+        )
+        super_admin = User.objects.create_superuser("read-boundary-admin@example.com", name="Super Admin", password=PASSWORD)
+        client = APIClient()
+        for staff in (super_admin, self.electrical_admin, self.worker):
+            client.force_authenticate(staff)
+            for path in (
+                "/api/complaints",
+                "/api/user/complaints",
+                f"/api/complaints/{complaint.pk}",
+                f"/api/user/complaints/{complaint.pk}",
+                f"/api/complaints/{complaint.pk}/updates",
+            ):
+                with self.subTest(role=staff.role, path=path):
+                    self.assertEqual(client.get(path).status_code, 403)
+        client.force_authenticate(self.user)
+        self.assertEqual(client.get(f"/api/complaints/{complaint.pk}").status_code, 200)
+        self.assertEqual(client.get(f"/api/complaints/{complaint.pk}/updates").status_code, 200)
 
     def test_unauthenticated_user_cannot_view_admin_complaint_list(self):
         client = APIClient()
@@ -199,12 +232,12 @@ class ComplaintWorkflowTests(TestCase):
             description="A complaint with status history and an update.",
             category="Electrical",
         )
-        complaint = transition_complaint(
-            complaint=complaint,
-            actor=self.electrical_admin,
-            new_status=Complaint.Status.IN_PROGRESS,
-            note="Work has started.",
+        assignment = assign_complaint(complaint=complaint, actor=self.electrical_admin, employee=self.worker)
+        assignment = accept_assignment(assignment=assignment, actor=self.worker)
+        update_assignment_progress(
+            assignment=assignment, actor=self.worker, note="Work has started.", progress_percent=25,
         )
+        complaint.refresh_from_db()
         history = complaint.status_history.get(new_status=Complaint.Status.IN_PROGRESS)
         AuditEvent.objects.create(
             actor=self.electrical_admin,
@@ -240,7 +273,7 @@ class ComplaintWorkflowTests(TestCase):
             for item in detail_response.data["complaint"]["statusHistory"]
             if item["id"] == history.pk
         )
-        self.assertEqual(transition_history["previous_status"], Complaint.Status.SUBMITTED)
+        self.assertEqual(transition_history["previous_status"], Complaint.Status.ACCEPTED)
         self.assertEqual(transition_history["new_status"], Complaint.Status.IN_PROGRESS)
         self.assertEqual(updates_response.status_code, 200, updates_response.data)
         self.assertEqual(updates_response.data["currentStatus"], Complaint.Status.IN_PROGRESS)
@@ -382,7 +415,7 @@ class ComplaintWorkflowTests(TestCase):
 
         close_url = f"/api/admin/complaints/{complaint.pk}/status"
 
-        # Closing without a resolution must be rejected.
+        # Managers cannot close before the assignment and verification lifecycle.
         response = client.patch(
             close_url,
             {"status": Complaint.Status.CLOSED},
@@ -390,25 +423,38 @@ class ComplaintWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-        # Add resolution.
-        client.patch(
+        assignment = assign_complaint(
+            complaint=complaint, actor=self.electrical_admin, employee=self.worker,
+        )
+        assignment = accept_assignment(assignment=assignment, actor=self.worker)
+        update_assignment_progress(
+            assignment=assignment, actor=self.worker, note="Repair started.", progress_percent=50,
+        )
+        assignment.refresh_from_db()
+        assignment = complete_assignment(assignment=assignment, actor=self.worker, note="Repaired")
+        response = client.patch(
             f"/api/admin/complaints/{complaint.pk}/resolution",
             {"resolution": "Repaired"},
             format="json",
         )
+        self.assertEqual(response.status_code, 200, response.data)
+        stale_resolved_complaint = Complaint.objects.get(pk=complaint.pk)
 
-        # Perform valid status transitions.
-        for status in [
-            Complaint.Status.IN_PROGRESS,
-            Complaint.Status.RESOLVED,
-            Complaint.Status.CLOSED,
-        ]:
-            response = client.patch(
-                close_url,
-                {"status": status},
-                format="json",
-            )
-            self.assertEqual(response.status_code, 200, response.data)
+        response = client.patch(
+            close_url,
+            {"status": Complaint.Status.CLOSED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        history_count_after_close = ComplaintStatusHistory.objects.filter(complaint=complaint).count()
+        close_audit_count_after_close = AuditEvent.objects.filter(
+            complaint=complaint, action="COMPLAINT_CLOSED",
+        ).count()
+        transition_complaint(
+            complaint=stale_resolved_complaint,
+            actor=self.electrical_admin,
+            new_status=Complaint.Status.CLOSED,
+        )
 
         complaint.refresh_from_db()
 
@@ -420,7 +466,12 @@ class ComplaintWorkflowTests(TestCase):
             complaint=complaint
         ).order_by("created_at")
 
-        self.assertEqual(history.count(), 4)
+        self.assertEqual(history.count(), 7)
+        self.assertEqual(ComplaintStatusHistory.objects.filter(complaint=complaint).count(), history_count_after_close)
+        self.assertEqual(
+            AuditEvent.objects.filter(complaint=complaint, action="COMPLAINT_CLOSED").count(),
+            close_audit_count_after_close,
+        )
 
         final_history = history.last()
         self.assertEqual(final_history.actor, self.electrical_admin)
@@ -528,15 +579,20 @@ class ComplaintWorkflowTests(TestCase):
         complaint.refresh_from_db()
         self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
 
-    def test_admin_can_update_complaint_status_successfully(self):
+    def test_super_admin_cannot_advance_submitted_complaint_without_assignment(self):
         complaint = create_complaint(
             actor=self.user,
-            title="Broken socket",
-            description="Socket is damaged",
+            title="Unassigned socket",
+            description="Socket needs inspection",
             category="Electrical",
         )
+        super_admin = User.objects.create_superuser(
+            "workflow-super-admin@example.com", name="Workflow Super Admin", password=PASSWORD,
+        )
         client = APIClient()
-        client.force_authenticate(self.electrical_admin)
+        client.force_authenticate(super_admin)
+        before_history = complaint.status_history.count()
+        before_audits = AuditEvent.objects.filter(complaint=complaint).count()
 
         response = client.patch(
             f"/api/admin/complaints/{complaint.pk}/status",
@@ -544,14 +600,34 @@ class ComplaintWorkflowTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.status_code, 400, response.data)
 
         complaint.refresh_from_db()
-        self.assertEqual(complaint.status, Complaint.Status.IN_PROGRESS)
-        self.assertTrue(
-            ComplaintStatusHistory.objects.filter(
-                complaint=complaint,
-                actor=self.electrical_admin,
-                new_status=Complaint.Status.IN_PROGRESS,
-            ).exists()
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+        self.assertFalse(WorkAssignment.objects.filter(complaint=complaint, is_current=True).exists())
+        self.assertEqual(complaint.status_history.count(), before_history)
+        self.assertEqual(AuditEvent.objects.filter(complaint=complaint).count(), before_audits)
+
+    def test_department_admin_cannot_save_resolution_before_work_completion(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Unstarted repair",
+            description="The repair has not been assigned or started.",
+            category="Electrical",
         )
+        client = APIClient()
+        client.force_authenticate(self.electrical_admin)
+        before_audits = AuditEvent.objects.filter(complaint=complaint).count()
+
+        response = client.patch(
+            f"/api/admin/complaints/{complaint.pk}/resolution",
+            {"resolution": "Repair completed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+        self.assertEqual(complaint.resolution, "")
+        self.assertFalse(AuditEvent.objects.filter(complaint=complaint, action__startswith="RESOLUTION_").exists())
+        self.assertEqual(AuditEvent.objects.filter(complaint=complaint).count(), before_audits)

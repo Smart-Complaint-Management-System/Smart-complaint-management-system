@@ -40,10 +40,10 @@ from complaints.services import (
     actor_can_manage_complaint,
     override_priority,
     reopen_complaint,
-    save_resolution,
     transition_complaint,
 )
-from assignments.services import reassign_complaint_department
+from assignments.models import WorkAssignment
+from assignments.services import reassign_complaint_department, verify_assignment
 from notifications.services import notify_complaint_stakeholders
 
 
@@ -122,6 +122,8 @@ class ComplaintListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        if request.user.role != UserRole.USER:
+            raise PermissionDenied("Only regular users can access this endpoint.")
         queryset = filter_complaints(visible_complaints_for(request.user), request.query_params)
         return _list_response(queryset)
 
@@ -144,6 +146,8 @@ class ComplaintDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, lookup):
+        if request.user.role != UserRole.USER:
+            raise PermissionDenied("Only regular users can access this endpoint.")
         complaint = find_visible_complaint(request.user, lookup)
         return Response({"complaint": ComplaintReadSerializer(complaint, context={"request": request}).data})
 
@@ -168,6 +172,8 @@ class ComplaintUpdatesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, lookup):
+        if request.user.role != UserRole.USER:
+            raise PermissionDenied("Only regular users can access this endpoint.")
         complaint = find_visible_complaint(request.user, lookup)
         events = []
         for event in AuditEvent.objects.filter(complaint=complaint).select_related("actor"):
@@ -303,12 +309,8 @@ class AdminComplaintStatusView(APIView):
         serializer = StatusChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         new_status = serializer.validated_data["status"]
-        if new_status not in (
-            Complaint.Status.IN_PROGRESS,
-            Complaint.Status.RESOLVED,
-            Complaint.Status.CLOSED,
-        ):
-            raise ValidationError({"status": "Use assignment actions for employee workflow statuses."})
+        if new_status != Complaint.Status.CLOSED:
+            raise ValidationError({"status": "Use assignment actions and verification for workflow status changes."})
         complaint = transition_complaint(
             complaint=complaint,
             actor=request.user,
@@ -327,11 +329,15 @@ class AdminComplaintResolutionView(APIView):
         complaint = find_visible_complaint(request.user, lookup)
         serializer = ResolutionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        complaint = save_resolution(
-            complaint=complaint,
+        assignment = WorkAssignment.objects.filter(complaint=complaint, is_current=True).first()
+        if assignment is None:
+            raise ValidationError({"resolution": "Completed work must be assigned and verified before resolution."})
+        verify_assignment(
+            assignment=assignment,
             actor=request.user,
             resolution=serializer.validated_data["resolution"],
         )
+        complaint.refresh_from_db()
         return Response({"message": "Complaint resolution saved successfully.", "complaint": ComplaintReadSerializer(complaint).data})
 
 

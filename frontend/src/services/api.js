@@ -1,4 +1,5 @@
 import axios from "axios";
+import { logoutWithPortalToken } from "../auth/portalAuth";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000",
@@ -33,9 +34,9 @@ export async function loginUser(email, password) {
   return response.data;
 }
 
-export async function logoutUser() {
-  const response = await api.post("/api/auth/logout");
-  return response.data;
+export async function logoutUser(token) {
+  const response = await logoutWithPortalToken(api, token);
+  return response?.data;
 }
 
 // 2. Complaint Submission (Dhruva Ganesh Hegde - SCMS-F-004 to F-007)
@@ -69,8 +70,8 @@ export async function adminLogin(email, password) {
   return response.data;
 }
 
-export async function staffLogin(email, password) {
-  const response = await api.post("/api/auth/login", { email, password });
+export async function employeeLogin(email, password) {
+  const response = await api.post("/api/employee/login", { email, password });
   return response.data;
 }
 

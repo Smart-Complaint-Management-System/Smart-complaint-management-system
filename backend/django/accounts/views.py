@@ -3,15 +3,15 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from accounts.roles import UserRole
 from accounts.serializers import (
-    EmailTokenObtainPairSerializer,
+    AdminPortalTokenObtainPairSerializer,
+    EmployeePortalTokenObtainPairSerializer,
     PasswordChangeSerializer,
     ProfileSerializer,
     RegistrationSerializer,
+    UserPortalTokenObtainPairSerializer,
     UserSummarySerializer,
 )
 from accounts.token_utils import issue_token_pair, revoke_user_tokens
@@ -44,7 +44,7 @@ class RegistrationView(APIView):
 
 class LoginView(TokenObtainPairView):
     permission_classes = [AllowAny]
-    serializer_class = EmailTokenObtainPairSerializer
+    serializer_class = UserPortalTokenObtainPairSerializer
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
@@ -55,14 +55,13 @@ class LoginView(TokenObtainPairView):
 class AdminLoginView(LoginView):
     """Compatibility login route restricted to organization administrators."""
 
-    def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        if serializer.user.role not in (UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_ADMIN):
-            raise AuthenticationFailed("Administrator access is required.")
-        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
-        _record_login(response)
-        return response
+    serializer_class = AdminPortalTokenObtainPairSerializer
+
+
+class EmployeeLoginView(LoginView):
+    """Login route restricted to employee accounts."""
+
+    serializer_class = EmployeePortalTokenObtainPairSerializer
 
 
 class LogoutView(APIView):

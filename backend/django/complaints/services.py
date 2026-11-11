@@ -220,10 +220,10 @@ def override_priority(*, complaint, actor, priority, reason):
 
 
 STATUS_TRANSITIONS = {
-    Complaint.Status.SUBMITTED: {Complaint.Status.ASSIGNED, Complaint.Status.IN_PROGRESS},
-    Complaint.Status.ASSIGNED: {Complaint.Status.ACCEPTED, Complaint.Status.IN_PROGRESS},
-    Complaint.Status.ACCEPTED: {Complaint.Status.IN_PROGRESS, Complaint.Status.WORK_COMPLETED},
-    Complaint.Status.IN_PROGRESS: {Complaint.Status.WORK_COMPLETED, Complaint.Status.RESOLVED},
+    Complaint.Status.SUBMITTED: {Complaint.Status.ASSIGNED},
+    Complaint.Status.ASSIGNED: {Complaint.Status.ACCEPTED},
+    Complaint.Status.ACCEPTED: {Complaint.Status.IN_PROGRESS},
+    Complaint.Status.IN_PROGRESS: {Complaint.Status.WORK_COMPLETED},
     Complaint.Status.WORK_COMPLETED: {Complaint.Status.RESOLVED},
     Complaint.Status.RESOLVED: {Complaint.Status.CLOSED},
     Complaint.Status.CLOSED: set(),
@@ -232,11 +232,31 @@ STATUS_TRANSITIONS = {
 
 @transaction.atomic
 def transition_complaint(*, complaint, actor, new_status, note="", metadata=None):
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
     if new_status == complaint.status:
         return complaint
     if new_status not in STATUS_TRANSITIONS.get(complaint.status, set()):
         raise ValidationError(
             {"status": f"Invalid status transition from '{complaint.status}' to '{new_status}'."}
+        )
+    from assignments.models import WorkAssignment
+
+    required_assignment_status = {
+        Complaint.Status.ASSIGNED: WorkAssignment.Status.ASSIGNED,
+        Complaint.Status.ACCEPTED: WorkAssignment.Status.ACCEPTED,
+        Complaint.Status.IN_PROGRESS: WorkAssignment.Status.IN_PROGRESS,
+        Complaint.Status.WORK_COMPLETED: WorkAssignment.Status.COMPLETED,
+        Complaint.Status.RESOLVED: WorkAssignment.Status.VERIFIED,
+        Complaint.Status.CLOSED: WorkAssignment.Status.VERIFIED,
+    }[new_status]
+    current_assignment = WorkAssignment.objects.select_for_update().filter(
+        complaint=complaint,
+        is_current=True,
+        status=required_assignment_status,
+    ).first()
+    if current_assignment is None:
+        raise ValidationError(
+            {"status": "The current work assignment has not reached the required workflow stage."}
         )
     if new_status in (Complaint.Status.RESOLVED, Complaint.Status.CLOSED) and not complaint.resolution.strip():
         raise ValidationError({"resolution": "A resolution is required before resolving or closing a complaint."})
@@ -277,8 +297,20 @@ def transition_complaint(*, complaint, actor, new_status, note="", metadata=None
 
 @transaction.atomic
 def save_resolution(*, complaint, actor, resolution):
-    if complaint.status == Complaint.Status.CLOSED:
-        raise ValidationError({"resolution": "A closed complaint cannot be modified."})
+    from assignments.models import WorkAssignment
+
+    if not actor_can_manage_complaint(actor, complaint):
+        raise ValidationError({"resolution": "Only a complaint manager can verify completed work."})
+    if complaint.status != Complaint.Status.WORK_COMPLETED or not WorkAssignment.objects.filter(
+        complaint=complaint,
+        is_current=True,
+        status=WorkAssignment.Status.COMPLETED,
+    ).exists():
+        raise ValidationError(
+            {"resolution": "A resolution can be recorded only while verifying completed work."}
+        )
+    if not resolution.strip():
+        raise ValidationError({"resolution": "A non-empty resolution is required."})
     old_resolution = complaint.resolution
     complaint.resolution = resolution.strip()
     complaint.save(update_fields=["resolution", "updated_at"])
@@ -302,28 +334,66 @@ def save_resolution(*, complaint, actor, resolution):
 
 @transaction.atomic
 def reopen_complaint(*, complaint, actor, reason):
+    if actor.role != UserRole.SUPER_ADMIN:
+        raise ValidationError("Only a Super Admin can reopen a complaint.")
+
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
     if complaint.status != Complaint.Status.CLOSED:
         raise ValidationError({"status": "Only closed complaints can be reopened."})
+
+    from assignments.models import WorkAssignment
+
+    current_assignment = WorkAssignment.objects.select_for_update().filter(
+        complaint=complaint,
+        is_current=True,
+    ).first()
     old_status = complaint.status
-    complaint.status = Complaint.Status.IN_PROGRESS
-    complaint.closed_at = None
+    old_resolution = complaint.resolution
+    previous_assignment = None
+    if current_assignment:
+        previous_assignment = {
+            "id": current_assignment.pk,
+            "status": current_assignment.status,
+        }
+        current_assignment.status = WorkAssignment.Status.CANCELED
+        current_assignment.is_current = False
+        current_assignment.save(update_fields=["status", "is_current"])
+
+    complaint.status = Complaint.Status.SUBMITTED
+    complaint.resolution = ""
     complaint.resolved_at = None
-    complaint.save(update_fields=["status", "closed_at", "resolved_at", "updated_at"])
+    complaint.closed_at = None
+    complaint.assigned_employee = None
+    complaint.save(
+        update_fields=[
+            "status",
+            "resolution",
+            "resolved_at",
+            "closed_at",
+            "assigned_employee",
+            "updated_at",
+        ]
+    )
+    history_metadata = {
+        "reopened": True,
+        "previous_resolution": old_resolution,
+        "previous_assignment": previous_assignment,
+    }
     _status_history(
         complaint=complaint,
         actor=actor,
         previous_status=old_status,
         new_status=complaint.status,
         note=reason.strip(),
-        metadata={"reopened": True},
+        metadata=history_metadata,
     )
     log_event(
         actor=actor,
         action="COMPLAINT_REOPENED",
         complaint=complaint,
-        previous_value={"status": old_status},
-        new_value={"status": complaint.status},
-        metadata={"reason": reason.strip()},
+        previous_value={"status": old_status, "resolution": old_resolution},
+        new_value={"status": complaint.status, "resolution": complaint.resolution},
+        metadata={"reason": reason.strip(), "previous_assignment": previous_assignment},
     )
     notify_complaint_stakeholders(
         complaint=complaint,

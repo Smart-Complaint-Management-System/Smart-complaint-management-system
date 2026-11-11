@@ -530,6 +530,42 @@ class ManagementPermissionAPITests(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    def test_login_endpoints_enforce_their_portal_roles(self):
+        credentials = {"password": "A-Strong-Test-Passphrase-193!"}
+        self.assertEqual(
+            self.client.post("/api/auth/login", {**credentials, "email": self.regular_user.email}, format="json").status_code,
+            200,
+        )
+        staff = (self.super_admin, self.department_admin, self.employee)
+        for account in staff:
+            with self.subTest(endpoint="user", role=account.role):
+                response = self.client.post("/api/auth/login", {**credentials, "email": account.email}, format="json")
+                self.assertEqual(response.status_code, 401, response.data)
+                self.assertNotIn("access", response.data)
+                self.assertNotIn("refresh", response.data)
+
+        for account in (self.super_admin, self.department_admin):
+            with self.subTest(endpoint="admin", role=account.role):
+                response = self.client.post("/api/admin/login", {**credentials, "email": account.email}, format="json")
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(response.data["user"]["role"], account.role)
+        for account in (self.regular_user, self.employee):
+            with self.subTest(endpoint="admin", role=account.role):
+                response = self.client.post("/api/admin/login", {**credentials, "email": account.email}, format="json")
+                self.assertEqual(response.status_code, 401, response.data)
+                self.assertNotIn("access", response.data)
+                self.assertNotIn("refresh", response.data)
+
+        response = self.client.post("/api/employee/login", {**credentials, "email": self.employee.email}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["user"]["role"], UserRole.EMPLOYEE)
+        for account in (self.regular_user, self.super_admin, self.department_admin):
+            with self.subTest(endpoint="employee", role=account.role):
+                response = self.client.post("/api/employee/login", {**credentials, "email": account.email}, format="json")
+                self.assertEqual(response.status_code, 401, response.data)
+                self.assertNotIn("access", response.data)
+                self.assertNotIn("refresh", response.data)
+
         
     def test_admin_login_accepts_super_admin(self):
         User.objects.create_superuser(
@@ -589,7 +625,7 @@ class ManagementPermissionAPITests(TestCase):
 
     def test_department_admin_jwt_keeps_department_scope(self):
         login = self.client.post(
-            "/api/auth/login",
+            "/api/admin/login",
             {
                 "email": "ELECTRICAL-ADMIN@example.com",
                 "password": "A-Strong-Test-Passphrase-193!",
