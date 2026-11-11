@@ -9,9 +9,7 @@ from complaints.priority import assess_priority
 from complaints.services import create_complaint, update_complaint
 from departments.models import Department
 
-
 PASSWORD = "Independent-Test-Passphrase#7291"
-
 
 class ComplaintWorkflowTests(TestCase):
     def setUp(self):
@@ -55,7 +53,6 @@ class ComplaintWorkflowTests(TestCase):
         client.force_authenticate(self.electrical_admin)
         self.assertEqual(client.get("/api/admin/complaints").data["count"], 1)
 
-        
     def test_super_admin_can_view_complaints_across_departments(self):
         create_complaint(
             actor=self.user,
@@ -158,8 +155,6 @@ class ComplaintWorkflowTests(TestCase):
         response = client.get(f"/api/admin/complaints/{complaint.pk}")
 
         self.assertEqual(response.status_code, 403)
-
-
 
     def test_priority_examples_are_transparent_and_ranked(self):
         exposed = assess_priority("Exposed electrical wire", "Live wire sparks near students", "Electrical")
@@ -278,3 +273,93 @@ class ComplaintWorkflowTests(TestCase):
 
     def test_unauthenticated_complaint_access_is_rejected(self):
         self.assertEqual(APIClient().get("/api/complaints").status_code, 401)
+
+# Sprint 3: US-015 admin status update tests
+
+    def test_regular_user_cannot_update_complaint_status(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Broken light",
+            description="Light is not working",
+            category="Electrical",
+        )
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        response = client.patch(
+            f"/api/admin/complaints/{complaint.pk}/status",
+            {"status": Complaint.Status.IN_PROGRESS},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+
+    def test_department_admin_cannot_update_another_departments_complaint(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Water leakage",
+            description="Pipe is leaking",
+            category="Plumbing",
+        )
+        client = APIClient()
+        client.force_authenticate(self.electrical_admin)
+
+        response = client.patch(
+            f"/api/admin/complaints/{complaint.pk}/status",
+            {"status": Complaint.Status.IN_PROGRESS},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+
+    def test_admin_cannot_skip_invalid_status_transition(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Broken socket",
+            description="Socket is damaged",
+            category="Electrical",
+        )
+        client = APIClient()
+        client.force_authenticate(self.electrical_admin)
+
+        response = client.patch(
+            f"/api/admin/complaints/{complaint.pk}/status",
+            {"status": Complaint.Status.CLOSED},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.SUBMITTED)
+
+    def test_admin_can_update_complaint_status_successfully(self):
+        complaint = create_complaint(
+            actor=self.user,
+            title="Broken socket",
+            description="Socket is damaged",
+            category="Electrical",
+        )
+        client = APIClient()
+        client.force_authenticate(self.electrical_admin)
+
+        response = client.patch(
+            f"/api/admin/complaints/{complaint.pk}/status",
+            {"status": Complaint.Status.IN_PROGRESS},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
+        complaint.refresh_from_db()
+        self.assertEqual(complaint.status, Complaint.Status.IN_PROGRESS)
+        self.assertTrue(
+            ComplaintStatusHistory.objects.filter(
+                complaint=complaint,
+                actor=self.electrical_admin,
+                new_status=Complaint.Status.IN_PROGRESS,
+            ).exists()
+        )
