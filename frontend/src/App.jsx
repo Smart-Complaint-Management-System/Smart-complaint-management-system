@@ -46,6 +46,7 @@ import {
   setAuthToken,
 } from "./services/api";
 import { establishPortalSession, restorePortalSession } from "./auth/portalAuth";
+import { getVisibleNavigationItems } from "./auth/portalNavigation";
 
 const NEXT_STATUS = {
   Submitted: "In Progress",
@@ -764,8 +765,7 @@ export default function App() {
         {/* Navigation Tabs */}
         <div className="border-t border-slate-100 bg-slate-50/50">
           <div className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-4 sm:px-6">
-            {menuItems
-              .filter((item) => !item.role || item.role === activeRole || (item.role === "admin" && activeRole === "employee"))
+            {getVisibleNavigationItems(menuItems, activeRole)
               .map((item) => (
                 <button
                   key={item.label}
