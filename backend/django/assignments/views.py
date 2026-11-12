@@ -161,12 +161,13 @@ class AssignmentActionView(APIView):
         elif action == "progress":
             serializer = ProgressSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            update_assignment_progress(
+            progress_update = update_assignment_progress(
                 assignment=assignment,
                 actor=request.user,
                 note=serializer.validated_data.get("note", ""),
                 progress_percent=serializer.validated_data.get("progress_percent"),
             )
+            assignment = progress_update.assignment
         elif action == "complete":
             serializer = CompleteWorkSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
@@ -232,7 +233,9 @@ class WorkloadView(APIView):
                 raise PermissionDenied("Invalid department filter.")
         elif has_role(request.user, UserRole.DEPARTMENT_ADMIN):
             department = department_for_user(request.user)
-            department_id = department.pk if department else None
+            if department is None:
+                raise PermissionDenied("A department admin profile is required to view workload.")
+            department_id = department.pk
         else:
             raise PermissionDenied("Employee workload is visible to department administrators.")
         return Response({"employees": _workload_for_department(int(department_id) if department_id else None)})

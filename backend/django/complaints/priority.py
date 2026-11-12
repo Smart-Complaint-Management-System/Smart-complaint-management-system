@@ -37,6 +37,8 @@ def _affected_count(text, keywords, cap):
     number_matches = re.findall(r"\b(\d{1,6})\s+(?:people|users|students|residents|staff|rooms)\b", text)
     if number_matches:
         count = max(int(value) for value in number_matches)
+        if count == 0:
+            return 0
         if count >= 50:
             return cap
         if count >= 10:
